@@ -4,19 +4,20 @@
 
 #pragma once
 
+#include "caf/detail/core_export.hpp"
+#include "caf/fwd.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <forward_list>
 #include <mutex>
 #include <thread>
 
-#include "caf/fwd.hpp"
-
 namespace caf::detail {
 
-class private_thread_pool {
+class CAF_CORE_EXPORT private_thread_pool {
 public:
-  struct node {
+  struct CAF_CORE_EXPORT node {
     virtual ~node();
     node* next = nullptr;
     // Called by the private thread pool to stop the node. Regular nodes should
@@ -24,7 +25,7 @@ public:
     virtual bool stop() = 0;
   };
 
-  explicit private_thread_pool(actor_system* sys) : sys_(sys), running_(0) {
+  explicit private_thread_pool(actor_system* sys) : sys_(sys) {
     // nop
   }
 
@@ -48,7 +49,7 @@ private:
   mutable std::mutex mtx_;
   std::condition_variable cv_;
   node* head_ = nullptr;
-  size_t running_;
+  size_t running_ = 0;
 };
 
 } // namespace caf::detail

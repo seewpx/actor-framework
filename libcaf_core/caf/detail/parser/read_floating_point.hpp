@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
-#include <type_traits>
-
 #include "caf/config.hpp"
 #include "caf/detail/parser/add_ascii.hpp"
 #include "caf/detail/parser/chars.hpp"
@@ -16,6 +12,10 @@
 #include "caf/detail/parser/sub_ascii.hpp"
 #include "caf/detail/scope_guard.hpp"
 #include "caf/pec.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <type_traits>
 
 CAF_PUSH_UNUSED_LABEL_WARNING
 
@@ -33,7 +33,7 @@ void read_floating_point(State& ps, Consumer&& consumer,
                          std::optional<ValueType> start_value,
                          bool negative = false) {
   // Any exponent larger than 511 always overflows.
-  static constexpr int max_double_exponent = 511;
+  constexpr int max_double_exponent = 511;
   // We assume a simple integer until proven wrong.
   enum sign_t { plus, minus };
   sign_t sign;
@@ -55,39 +55,6 @@ void read_floating_point(State& ps, Consumer&& consumer,
   auto dec_exp = 0;
   // Exponent part of a floating point literal.
   auto exp = 0;
-  // Computes the result on success.
-  auto g = caf::detail::make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character) {
-      // Compute final floating point number.
-      // 1) Fix the exponent.
-      exp += dec_exp;
-      // 2) Check whether exponent is in valid range.
-      if (exp < -max_double_exponent) {
-        ps.code = pec::exponent_underflow;
-        return;
-      }
-      if (exp > max_double_exponent) {
-        ps.code = pec::exponent_overflow;
-        return;
-      }
-      // 3) Scale result.
-      // Pre-computed powers of 10 for the scaling loop.
-      static double powerTable[] = {1e1,  1e2,  1e4,   1e8,  1e16,
-                                    1e32, 1e64, 1e128, 1e256};
-      auto i = 0;
-      if (exp < 0) {
-        for (auto n = -exp; n != 0; n >>= 1, ++i)
-          if (n & 0x01)
-            result /= powerTable[i];
-      } else {
-        for (auto n = exp; n != 0; n >>= 1, ++i)
-          if (n & 0x01)
-            result *= powerTable[i];
-      }
-      // 4) Fix sign and call consumer.
-      consumer.value(sign == plus ? result : -result);
-    }
-  });
   // Reads the a decimal place.
   auto rd_decimal = [&](char c) {
     --dec_exp;
@@ -167,11 +134,41 @@ void read_floating_point(State& ps, Consumer&& consumer,
   }
   fin();
   // clang-format on
+  if (ps.code > pec::trailing_character)
+    return;
+  // Compute final floating point number.
+  // 1) Fix the exponent.
+  exp += dec_exp;
+  // 2) Check whether exponent is in valid range.
+  if (exp < -max_double_exponent) {
+    ps.code = pec::exponent_underflow;
+    return;
+  }
+  if (exp > max_double_exponent) {
+    ps.code = pec::exponent_overflow;
+    return;
+  }
+  // 3) Scale result.
+  // Pre-computed powers of 10 for the scaling loop.
+  static double powerTable[] = {1e1,  1e2,  1e4,   1e8,  1e16,
+                                1e32, 1e64, 1e128, 1e256};
+  auto i = 0;
+  if (exp < 0) {
+    for (auto n = -exp; n != 0; n >>= 1, ++i)
+      if (n & 0x01)
+        result /= powerTable[i];
+  } else {
+    for (auto n = exp; n != 0; n >>= 1, ++i)
+      if (n & 0x01)
+        result *= powerTable[i];
+  }
+  // 4) Fix sign and call consumer.
+  consumer.value(sign == plus ? result : -result);
 }
 
 template <class State, class Consumer>
 void read_floating_point(State& ps, Consumer&& consumer) {
-  using consumer_type = typename std::decay<Consumer>::type;
+  using consumer_type = std::decay_t<Consumer>;
   using value_type = typename consumer_type::value_type;
   return read_floating_point(ps, consumer, std::optional<value_type>{});
 }

@@ -27,6 +27,12 @@ namespace caf::flow {
 
 class coordinator;
 
+using coordinator_ptr = intrusive_ptr<coordinator>;
+
+class coordinated;
+
+using coordinated_ptr = intrusive_ptr<coordinated>;
+
 class subscription;
 
 template <class T>
@@ -43,6 +49,9 @@ class observable_def;
 
 template <class Generator>
 class generation_materializer;
+
+template <class T>
+class multicaster;
 
 /// A blueprint for an @ref observer that generates items and applies any number
 /// of processing steps immediately before emitting them.
@@ -130,3 +139,10 @@ using assert_scheduled_actor_hdr_t
   = std::enable_if_t<assert_scheduled_actor_hdr<T>::value, V>;
 
 } // namespace caf::flow
+
+namespace caf::flow::op {
+
+template <class T>
+class base;
+
+} // namespace caf::flow::op

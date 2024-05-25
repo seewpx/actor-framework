@@ -4,11 +4,12 @@
 
 #pragma once
 
-#include <chrono>
-#include <string>
-
 #include "caf/detail/core_export.hpp"
 #include "caf/fwd.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <string>
 
 namespace caf {
 
@@ -77,9 +78,41 @@ public:
   disposable schedule_message(time_point t, weak_actor_ptr receiver,
                               mailbox_element_ptr content);
 
-  /// Schedules an arbitrary message to `target` for time point `t`.
-  disposable schedule_message(time_point t, group target,
-                              strong_actor_ptr sender, message content);
+  /// Schedules an arbitrary message to `receiver` as an anonymous message that
+  /// shall be delivered when `timeout` has expired.
+  disposable schedule_message(std::nullptr_t, strong_actor_ptr receiver,
+                              time_point timeout, message_id mid,
+                              message content);
+
+  /// Schedules an arbitrary message to `receiver` as an anonymous message that
+  /// shall be delivered when `timeout` has expired.
+  disposable schedule_message(std::nullptr_t, weak_actor_ptr receiver,
+                              time_point timeout, message_id mid,
+                              message content);
+
+  /// Schedules an arbitrary message from `sender` to `receiver` that shall be
+  /// delivered when `timeout` has expired.
+  disposable schedule_message(strong_actor_ptr sender,
+                              strong_actor_ptr receiver, time_point timeout,
+                              message_id mid, message content);
+
+  /// Schedules an arbitrary message from `sender` to `receiver` that shall be
+  /// delivered when `timeout` has expired.
+  disposable schedule_message(strong_actor_ptr sender, weak_actor_ptr receiver,
+                              time_point timeout, message_id mid,
+                              message content);
+
+  /// Schedules an arbitrary message from `sender` to `receiver` that shall be
+  /// delivered when `timeout` has expired.
+  disposable schedule_message(weak_actor_ptr sender, strong_actor_ptr receiver,
+                              time_point timeout, message_id mid,
+                              message content);
+
+  /// Schedules an arbitrary message from `sender` to `receiver` that shall be
+  /// delivered when `timeout` has expired.
+  disposable schedule_message(weak_actor_ptr sender, weak_actor_ptr receiver,
+                              time_point timeout, message_id mid,
+                              message content);
 };
 
 } // namespace caf

@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <cstdint>
-#include <mutex>
-#include <vector>
-
 #include "caf/actor_control_block.hpp"
 #include "caf/detail/io_export.hpp"
 #include "caf/fwd.hpp"
 #include "caf/mailbox_element.hpp"
+
+#include <cstdint>
+#include <mutex>
+#include <vector>
 
 namespace caf::io::basp {
 
@@ -35,11 +35,11 @@ public:
   // -- mutators ---------------------------------------------------------------
 
   /// Adds a new message to the queue or deliver it immediately if possible.
-  void push(execution_unit* ctx, uint64_t id, strong_actor_ptr receiver,
+  void push(scheduler* ctx, uint64_t id, strong_actor_ptr receiver,
             mailbox_element_ptr content);
 
   /// Marks given ID as dropped, effectively skipping it without effect.
-  void drop(execution_unit* ctx, uint64_t id);
+  void drop(scheduler* ctx, uint64_t id);
 
   /// Returns the next ascending ID.
   uint64_t new_id();

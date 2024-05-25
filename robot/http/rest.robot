@@ -1,16 +1,28 @@
 *** Settings ***
 Documentation     A test suite for examples/http/rest.hpp.
+Library           String
 Library           Process
 Library           RequestsLibrary
+Test Timeout      1 minute
 
 Suite Setup       Start Servers
 Suite Teardown    Stop Servers
 
 *** Variables ***
-${HTTP_URL}       http://localhost:55501
-${HTTPS_URL}      https://localhost:55502
-${BINARY_PATH}    /path/to/the/server
-${SSL_PATH}       /path/to/the/pem/files
+${HTTP_URL}             http://localhost:55501
+${HTTPS_URL}            https://localhost:55502
+${BINARY_PATH}          /path/to/the/server
+${SSL_PATH}             /path/to/the/pem/files
+${MAX_REQUEST_SIZE}     2048
+
+# Prometheus variables
+${PR_SERVER_PORT}       55517
+${PR_HTTP_URL}          http://localhost:55517/metrics
+${PR_HTTP_BAD_URL}      http://localhost:55517/foobar
+
+${PR_SSL_SERVER_PORT}       55518
+${PR_HTTPS_URL}          https://localhost:55518/metrics
+${PR_HTTPS_BAD_URL}      https://localhost:55518/foobar
 
 *** Test Cases ***
 HTTP Test Add Key Value Pair
@@ -47,18 +59,36 @@ HTTPS Test Delete Key Value Pair
     Delete Key Value Pair    ${HTTPS_URL}    foo
     Key Should Not Exist     ${HTTPS_URL}    foo
 
+HTTPS Test Request Exceeds Maximum Size
+    [Tags]    POST
+    ${large_value}=    Generate Random String       ${MAX_REQUEST_SIZE}
+    POST    ${HTTP_URL}/api/foo    data=${large_value}    expected_status=413    verify=${False}
+
+HTTP Propetheus Endpoint
+    [Tags]    GET
+    ${resp}=    GET    ${PR_HTTP_URL}
+    ${content}=    Decode Bytes To String    ${resp.content}    utf-8
+    Should Contain    ${content}    caf_system_running_actors
+    Run Keyword And Expect Error    *    GET    ${PR_HTTP_BAD_URL}
+
+HTTPS Propetheus Endpoint
+    [Tags]    GET
+    ${resp}=    GET    ${PR_HTTPS_URL}   verify=${False}
+    ${content}=    Decode Bytes To String    ${resp.content}    utf-8
+    Should Contain    ${content}    caf_system_running_actors
+    Run Keyword And Expect Error    *    GET    ${PR_HTTPS_BAD_URL}   verify=${False}
+
 *** Keywords ***
 Start Servers
-    ${res1}=    Start Process    ${BINARY_PATH}  -p  55501
-    Set Suite Variable    ${http_server_process}    ${res1}
-    ${res2}=    Start Process    ${BINARY_PATH}  -p  55502  -k  ${SSL_PATH}/key.pem  -c  ${SSL_PATH}/cert.pem
-    Set Suite Variable    ${https_server_process}    ${res2}
+    Start Process  ${BINARY_PATH}  -p  55501  -r  ${MAX_REQUEST_SIZE}  --caf.net.prometheus-http.port  ${PR_SERVER_PORT}
+    Start Process  ${BINARY_PATH}  -p  55502  -r  ${MAX_REQUEST_SIZE}  -k  ${SSL_PATH}/key.pem  -c  ${SSL_PATH}/cert.pem
+    ...    --caf.net.prometheus-http.port  ${PR_SSL_SERVER_PORT}  --caf.net.prometheus-http.tls.key-file  ${SSL_PATH}/key.pem
+    ...    --caf.net.prometheus-http.tls.cert-file  ${SSL_PATH}/cert.pem
     Wait Until Keyword Succeeds    5s    125ms    Check If HTTP Server Is Reachable
     Wait Until Keyword Succeeds    5s    125ms    Check If HTTPS Server Is Reachable
 
 Stop Servers
-    Terminate Process    ${http_server_process}
-    Terminate Process    ${https_server_process}
+    Run Keyword And Ignore Error    Terminate All Processes
 
 Check If HTTP Server Is Reachable
     Log         Try reaching ${HTTP_URL}/status.

@@ -1,10 +1,11 @@
 // showcases how to add custom message types to CAF
 // if friend access for serialization is available
 
+#include "caf/all.hpp"
+#include "caf/anon_mail.hpp"
+
 #include <iostream>
 #include <utility>
-
-#include "caf/all.hpp"
 
 class foo;
 
@@ -58,12 +59,12 @@ private:
 
 behavior testee(event_based_actor* self) {
   return {
-    [=](const foo& x) { aout(self) << deep_to_string(x) << endl; },
+    [self](const foo& x) { self->println("{}", x); },
   };
 }
 
 void caf_main(actor_system& sys) {
-  anon_send(sys.spawn(testee), foo{1, 2});
+  anon_mail(foo{1, 2}).send(sys.spawn(testee));
 }
 
 CAF_MAIN(id_block::custom_types_2)

@@ -1,14 +1,13 @@
-call "c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
-
 cmake.exe ^
   -S . ^
   -B build ^
   -G "Visual Studio 17 2022" ^
   -C ".ci\debug-flags.cmake" ^
-  -DEXTRA_FLAGS=/MP%CIRRUS_CPU% ^
-  -DBUILD_SHARED_LIBS=OFF ^
   -DCMAKE_C_COMPILER=cl.exe ^
   -DCMAKE_CXX_COMPILER=cl.exe ^
-  -DOPENSSL_ROOT_DIR="C:\Program Files\OpenSSL-Win64"
+  -DCMAKE_CXX_FLAGS="/WX" ^
+  -DPython3_ROOT_DIR=%Python3_ROOT_DIR% ^
+  -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=%cd%\bin ^
+  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=%cd%\bin
 
-cmake.exe --build build --target install --config debug || exit \b 1
+cmake.exe --build build --parallel %NUMBER_OF_PROCESSORS% --target install --config debug || exit \b 1

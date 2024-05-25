@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <tuple>
-
 #include "caf/delegated.hpp"
+#include "caf/detail/type_list.hpp"
 #include "caf/fwd.hpp"
 #include "caf/response_promise.hpp"
+#include "caf/statically_typed.hpp"
 #include "caf/system_messages.hpp"
 #include "caf/typed_response_promise.hpp"
 
-#include "caf/detail/type_list.hpp"
+#include <tuple>
 
 namespace caf::detail {
 
@@ -31,17 +31,22 @@ struct make_response_promise_helper<response_promise> {
   using type = response_promise;
 };
 
+/// Convenience alias for `make_response_promise_helper<Ts...>::type`.
 template <class... Ts>
-using response_promise_t = typename make_response_promise_helper<Ts...>::type;
+using make_response_promise_helper_t =
+  typename make_response_promise_helper<Ts...>::type;
+
+template <class... Ts>
+using response_promise_t = make_response_promise_helper_t<Ts...>;
 
 template <class Output, class F>
 struct type_checker {
   static void check() {
-    using arg_types = typename tl_map<typename get_callable_trait<F>::arg_types,
-                                      std::decay>::type;
-    static_assert(std::is_same<Output, arg_types>::value
-                    || (std::is_same<Output, type_list<void>>::value
-                        && std::is_same<arg_types, type_list<>>::value),
+    using arg_types
+      = tl_map_t<typename get_callable_trait<F>::arg_types, std::decay>;
+    static_assert(std::is_same_v<Output, arg_types>
+                    || (std::is_same_v<Output, type_list<void>>
+                        && std::is_same_v<arg_types, type_list<>>),
                   "wrong functor signature");
   }
 };
@@ -110,15 +115,19 @@ template <class... Ts>
 struct extend_with_helper;
 
 template <class... Xs>
-struct extend_with_helper<typed_actor<Xs...>> {
+struct extend_with_helper<type_list<Xs...>> {
   using type = typed_actor<Xs...>;
 };
 
 template <class... Xs, class... Ys, class... Ts>
-struct extend_with_helper<typed_actor<Xs...>, typed_actor<Ys...>, Ts...>
-  : extend_with_helper<typed_actor<Xs..., Ys...>, Ts...> {
+struct extend_with_helper<type_list<Xs...>, type_list<Ys...>, Ts...>
+  : extend_with_helper<type_list<Xs..., Ys...>, Ts...> {
   // nop
 };
+
+/// Convenience alias for `extend_with_helper<Ts...>::type`.
+template <class... Ts>
+using extend_with_helper_t = typename extend_with_helper<Ts...>::type;
 
 template <class F>
 struct is_normalized_signature {
@@ -126,9 +135,8 @@ struct is_normalized_signature {
 };
 
 template <class T>
-constexpr bool is_decayed = !std::is_reference<T>::value
-                            && !std::is_const<T>::value
-                            && !std::is_volatile<T>::value;
+inline constexpr bool is_decayed
+  = !std::is_reference_v<T> && !std::is_const_v<T> && !std::is_volatile_v<T>;
 
 template <class... Out, class... In>
 struct is_normalized_signature<result<Out...>(In...)> {
@@ -138,5 +146,26 @@ struct is_normalized_signature<result<Out...>(In...)> {
 
 template <class F>
 constexpr bool is_normalized_signature_v = is_normalized_signature<F>::value;
+
+template <class SigsList>
+struct are_signatures_normalized;
+
+template <class... Sigs>
+struct are_signatures_normalized<type_list<Sigs...>> {
+  static constexpr bool value
+    = (detail::is_normalized_signature_v<Sigs> && ...);
+};
+
+template <class SigsList>
+inline constexpr bool are_signatures_normalized_v
+  = are_signatures_normalized<SigsList>::value;
+
+template <class... Sigs>
+struct broker_from_signatures;
+
+template <class... Sigs>
+struct broker_from_signatures<type_list<Sigs...>> {
+  using type = io::typed_broker<Sigs...>;
+};
 
 } // namespace caf::detail

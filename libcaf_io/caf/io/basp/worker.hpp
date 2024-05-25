@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <atomic>
-#include <cstdint>
-#include <vector>
+#include "caf/io/basp/fwd.hpp"
+#include "caf/io/basp/header.hpp"
+#include "caf/io/basp/remote_message_handler.hpp"
 
 #include "caf/byte_buffer.hpp"
 #include "caf/config.hpp"
@@ -14,11 +14,10 @@
 #include "caf/detail/io_export.hpp"
 #include "caf/detail/worker_hub.hpp"
 #include "caf/fwd.hpp"
-#include "caf/io/basp/fwd.hpp"
-#include "caf/io/basp/header.hpp"
-#include "caf/io/basp/remote_message_handler.hpp"
 #include "caf/node_id.hpp"
 #include "caf/resumable.hpp"
+
+#include <cstdint>
 
 namespace caf::io::basp {
 
@@ -33,8 +32,6 @@ public:
   // -- member types -----------------------------------------------------------
 
   using super = detail::abstract_worker;
-
-  using scheduler_type = scheduler::abstract_coordinator;
 
   using hub_type = detail::worker_hub<worker>;
 
@@ -52,7 +49,7 @@ public:
 
   // -- implementation of resumable --------------------------------------------
 
-  resume_result resume(execution_unit* ctx, size_t) override;
+  resume_result resume(scheduler* ctx, size_t) override;
 
 private:
   // -- constants and assertions -----------------------------------------------

@@ -4,17 +4,19 @@
 
 #pragma once
 
-#include "caf/detail/net_export.hpp"
-#include "caf/expected.hpp"
 #include "caf/net/dsl/arg.hpp"
 #include "caf/net/fwd.hpp"
 #include "caf/net/socket_guard.hpp"
+#include "caf/net/ssl/connection.hpp"
 #include "caf/net/ssl/dtls.hpp"
 #include "caf/net/ssl/format.hpp"
 #include "caf/net/ssl/password.hpp"
 #include "caf/net/ssl/tls.hpp"
 #include "caf/net/ssl/verify.hpp"
 #include "caf/net/stream_socket.hpp"
+
+#include "caf/detail/net_export.hpp"
+#include "caf/expected.hpp"
 
 #include <cstring>
 #include <string>

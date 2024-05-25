@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include "caf/net/fwd.hpp"
+#include "caf/net/http/lower_layer.hpp"
+
 #include "caf/byte_buffer.hpp"
 #include "caf/detail/net_export.hpp"
 #include "caf/dictionary.hpp"
-#include "caf/net/fwd.hpp"
 
 #include <cstddef>
 #include <string>
@@ -138,7 +140,7 @@ public:
 
   /// Writes the HTTP response message to `down`.
   /// @pre `has_valid_key()`
-  void write_response(http::lower_layer* down) const;
+  void write_response(http::lower_layer::server* down) const;
 
   /// Checks whether the `http_response` contains a HTTP 1.1 response to the
   /// generated HTTP GET request. A valid response contains:

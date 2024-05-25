@@ -4,40 +4,26 @@
 
 #pragma once
 
-#include <chrono>
-#include <cstddef>
-#include <memory>
-
 #include "caf/actor_control_block.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/intrusive/singly_linked.hpp"
 #include "caf/message.hpp"
 #include "caf/message_id.hpp"
-#include "caf/tracing_data.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <memory>
 
 namespace caf {
 
 class CAF_CORE_EXPORT mailbox_element
   : public intrusive::singly_linked<mailbox_element> {
 public:
-  using forwarding_stack = std::vector<strong_actor_ptr>;
-
   /// Source of this message and receiver of the final response.
   strong_actor_ptr sender;
 
   /// Denotes whether this an asynchronous message or a request.
   message_id mid;
-
-  /// `stages.back()` is the next actor in the forwarding chain,
-  /// if this is empty then the original sender receives the response.
-  forwarding_stack stages;
-
-#ifdef CAF_ENABLE_ACTOR_PROFILER
-  /// Optional tracing information. This field is unused by default, but an
-  /// @ref actor_profiler can make use of it to inject application-specific
-  /// instrumentation.
-  tracing_data_ptr tracing_id;
-#endif // CAF_ENABLE_ACTOR_PROFILER
 
   /// Stores the payload.
   message payload;
@@ -65,8 +51,7 @@ public:
 
   mailbox_element() = default;
 
-  mailbox_element(strong_actor_ptr sender, message_id mid,
-                  forwarding_stack stages, message payload);
+  mailbox_element(strong_actor_ptr sender, message_id mid, message payload);
 
   bool is_high_priority() const {
     return mid.category() == message_id::urgent_message_category;
@@ -92,10 +77,6 @@ public:
 template <class Inspector>
 bool inspect(Inspector& f, mailbox_element& x) {
   return f.object(x).fields(f.field("sender", x.sender), f.field("mid", x.mid),
-                            f.field("stages", x.stages),
-#ifdef CAF_ENABLE_ACTOR_PROFILER
-                            f.field("tracing_id", x.tracing_id),
-#endif // CAF_ENABLE_ACTOR_PROFILER
                             f.field("payload", x.payload));
 }
 
@@ -104,18 +85,16 @@ using mailbox_element_ptr = std::unique_ptr<mailbox_element>;
 
 /// @relates mailbox_element
 CAF_CORE_EXPORT mailbox_element_ptr
-make_mailbox_element(strong_actor_ptr sender, message_id id,
-                     mailbox_element::forwarding_stack stages, message content);
+make_mailbox_element(strong_actor_ptr sender, message_id id, message content);
 
 /// @relates mailbox_element
 template <class T, class... Ts>
-std::enable_if_t<!std::is_same<typename std::decay<T>::type, message>::value
+std::enable_if_t<!std::is_same_v<std::decay_t<T>, message>
                    || (sizeof...(Ts) > 0),
                  mailbox_element_ptr>
-make_mailbox_element(strong_actor_ptr sender, message_id id,
-                     mailbox_element::forwarding_stack stages, T&& x,
+make_mailbox_element(strong_actor_ptr sender, message_id id, T&& x,
                      Ts&&... xs) {
-  return make_mailbox_element(std::move(sender), id, std::move(stages),
+  return make_mailbox_element(std::move(sender), id,
                               make_message(std::forward<T>(x),
                                            std::forward<Ts>(xs)...));
 }

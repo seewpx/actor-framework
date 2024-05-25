@@ -1,11 +1,13 @@
 // Simple chat server with a binary protocol.
 
+#include "caf/net/lp/with.hpp"
+#include "caf/net/middleman.hpp"
+
 #include "caf/actor_system.hpp"
 #include "caf/actor_system_config.hpp"
 #include "caf/caf_main.hpp"
+#include "caf/chunk.hpp"
 #include "caf/event_based_actor.hpp"
-#include "caf/net/lp/with.hpp"
-#include "caf/net/middleman.hpp"
 #include "caf/scheduled_actor/flow.hpp"
 #include "caf/span.hpp"
 #include "caf/uuid.hpp"
@@ -25,6 +27,8 @@ static constexpr uint16_t default_port = 7788;
 
 static constexpr std::string_view default_host = "localhost";
 
+static constexpr std::string_view default_name = "";
+
 // -- configuration setup ------------------------------------------------------
 
 struct config : caf::actor_system_config {
@@ -37,6 +41,14 @@ struct config : caf::actor_system_config {
       .add<bool>("enable", "enables encryption via TLS")
       .add<std::string>("ca-file", "CA file for trusted servers");
   }
+
+  caf::settings dump_content() const override {
+    auto result = actor_system_config::dump_content();
+    caf::put_missing(result, "port", default_port);
+    caf::put_missing(result, "host", default_host);
+    caf::put_missing(result, "name", default_name);
+    return result;
+  }
 };
 
 // -- main ---------------------------------------------------------------------
@@ -46,7 +58,7 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
   auto use_ssl = caf::get_or(cfg, "tls.enable", false);
   auto port = caf::get_or(cfg, "port", default_port);
   auto host = caf::get_or(cfg, "host", default_host);
-  auto name = caf::get_or(cfg, "name", "");
+  auto name = caf::get_or(cfg, "name", default_name);
   auto ca_file = caf::get_as<std::string>(cfg, "tls.ca-file");
   if (name.empty()) {
     std::cerr << "*** mandatory parameter 'name' missing or empty\n";
@@ -70,11 +82,13 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
             pull
               .observe_on(self) //
               .do_on_error([](const caf::error& err) {
-                std::cout << "*** connection error: " << to_string(err) << '\n';
+                std::cout << "*** connection error: " << to_string(err)
+                          << std::endl;
               })
               .do_finally([self] {
                 std::cout << "*** lost connection to server -> quit\n"
-                          << "*** use CTRL+D or CTRL+C to terminate\n";
+                             "*** use CTRL+D or CTRL+C to terminate"
+                          << std::endl;
                 self->quit();
               })
               .for_each([](const lp::frame& frame) {
@@ -83,10 +97,10 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
                 auto str = std::string_view{
                   reinterpret_cast<const char*>(bytes.data()), bytes.size()};
                 if (std::all_of(str.begin(), str.end(), ::isprint)) {
-                  std::cout << str << '\n';
+                  std::cout << str << std::endl;
                 } else {
-                  std::cout << "<non-ascii-data of size " << bytes.size()
-                            << ">\n";
+                  std::cout << "<non-ascii-data of size " << bytes.size() << ">"
+                            << std::endl;
                 }
               });
           });
@@ -95,8 +109,7 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
           // blocking I/O calls.
           sys.spawn<caf::detached>([push, name] {
             auto lines = caf::async::make_blocking_producer(push);
-            if (!lines)
-              throw std::logic_error("failed to create blocking producer");
+            assert(lines);
             auto line = std::string{};
             auto prefix = name + ": ";
             while (std::getline(std::cin, line)) {

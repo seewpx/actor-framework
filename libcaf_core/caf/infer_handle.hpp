@@ -25,10 +25,25 @@ enum class spawn_mode { function, function_with_selfptr, clazz };
 template <spawn_mode X>
 using spawn_mode_token = std::integral_constant<spawn_mode, X>;
 
+template <class T>
+struct infer_handle_from_behavior {
+  using type = actor;
+};
+
+template <class... Sigs>
+struct infer_handle_from_behavior<typed_behavior<Sigs...>> {
+  using type = typed_actor<Sigs...>;
+};
+
+/// Convenience alias for `infer_handle_from_behavior<T>::type`.
+template <class T>
+using infer_handle_from_behavior_t =
+  typename infer_handle_from_behavior<T>::type;
+
 // default: dynamically typed actor without self pointer
 template <class Result, class FirstArg,
-          bool FirstArgValid = std::is_base_of<
-            local_actor, typename std::remove_pointer<FirstArg>::type>::value>
+          bool FirstArgValid
+          = std::is_base_of_v<local_actor, std::remove_pointer_t<FirstArg>>>
 struct infer_handle_from_fun_impl {
   using type = actor;
   using impl = event_based_actor;
@@ -66,8 +81,8 @@ struct infer_handle_from_fun_impl<typed_behavior<Sigs...>, Impl, false> {
 // statically typed actor with self pointer
 template <class... Sigs, class Impl>
 struct infer_handle_from_fun_impl<typed_behavior<Sigs...>, Impl*, true> {
-  static_assert(std::is_base_of<typed_event_based_actor<Sigs...>, Impl>::value
-                  || std::is_base_of<io::typed_broker<Sigs...>, Impl>::value,
+  static_assert(std::is_base_of_v<typed_event_based_actor<Sigs...>, Impl>
+                  || std::is_base_of_v<io::typed_broker<Sigs...>, Impl>,
                 "Self pointer does not match the returned behavior type.");
   using type = typed_actor<Sigs...>;
   using impl = Impl;
@@ -76,11 +91,11 @@ struct infer_handle_from_fun_impl<typed_behavior<Sigs...>, Impl*, true> {
 };
 
 /// Deduces an actor handle type from a function or function object.
-template <class F, class Trait = typename detail::get_callable_trait<F>::type>
-struct infer_handle_from_fun {
+template <class Trait>
+struct infer_handle_from_fun_trait {
   using result_type = typename Trait::result_type;
   using arg_types = typename Trait::arg_types;
-  using first_arg = typename detail::tl_head<arg_types>::type;
+  using first_arg = detail::tl_head_t<arg_types>;
   using delegate = infer_handle_from_fun_impl<result_type, first_arg>;
   using type = typename delegate::type;
   using impl = typename delegate::impl;
@@ -91,28 +106,22 @@ struct infer_handle_from_fun {
 
 /// @relates infer_handle_from_fun
 template <class F>
-using infer_handle_from_fun_t = typename infer_handle_from_fun<F>::type;
+using infer_handle_from_fun_trait_t
+  = infer_handle_from_fun_trait<detail::get_callable_trait_t<F>>;
 
 /// @relates infer_handle_from_fun
-template <class T>
-using infer_impl_from_fun_t = typename infer_handle_from_fun<T>::impl;
+template <class F>
+using infer_handle_from_fun_t = typename infer_handle_from_fun_trait_t<F>::type;
 
-template <class T>
-struct infer_handle_from_behavior {
-  using type = actor;
-};
-
-template <class... Sigs>
-struct infer_handle_from_behavior<typed_behavior<Sigs...>> {
-  using type = typed_actor<Sigs...>;
-};
+/// @relates infer_handle_from_fun
+template <class F>
+using infer_impl_from_fun_t = typename infer_handle_from_fun_trait_t<F>::impl;
 
 /// Deduces `actor` for dynamically typed actors, otherwise `typed_actor<...>`
 /// is deduced.
-template <class T, bool = std::is_base_of<abstract_actor, T>::value>
+template <class T, bool = std::is_base_of_v<abstract_actor, T>>
 struct infer_handle_from_class {
-  using type =
-    typename infer_handle_from_behavior<typename T::behavior_type>::type;
+  using type = infer_handle_from_behavior_t<typename T::behavior_type>;
   static constexpr spawn_mode mode = spawn_mode::clazz;
 };
 
@@ -136,5 +145,9 @@ struct is_handle<strong_actor_ptr> : std::true_type {};
 
 template <class... Ts>
 struct is_handle<typed_actor<Ts...>> : std::true_type {};
+
+/// Convenience alias for `is_handle<T>::value`.
+template <class T>
+inline constexpr bool is_handle_v = is_handle<T>::value;
 
 } // namespace caf

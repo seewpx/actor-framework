@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "caf/detail/assert.hpp"
+
 #include <cstddef>
 #include <string>
 #include <utility>
-
-#include "caf/config.hpp"
 
 namespace caf::io {
 

@@ -8,14 +8,14 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <type_traits>
-
 #include "caf/default_enum_inspect.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/fwd.hpp"
 #include "caf/is_error_code_enum.hpp"
+
+#include <cstdint>
+#include <string>
+#include <type_traits>
 
 namespace caf {
 
@@ -87,6 +87,8 @@ enum class sec : uint8_t {
   invalid_stream = 30,
   /// Subscribing to a stream failed because it can only be subscribed to once.
   cannot_resubscribe_stream,
+  /// A stream was aborted by the hosting actor, usually because it terminated.
+  stream_aborted,
   /// A function view was called without assigning an actor first.
   bad_function_call = 40,
   /// Feature is disabled in the actor system config.
@@ -105,8 +107,8 @@ enum class sec : uint8_t {
   incompatible_versions,
   /// Connection refused because of incompatible application IDs.
   incompatible_application_ids,
-  /// The middleman received a malformed BASP message from another node.
-  malformed_basp_message,
+  /// Received a malformed message from another node.
+  malformed_message,
   /// The middleman closed a connection because it failed to serialize or
   /// deserialize a payload.
   serializing_basp_payload_failed = 50,
@@ -163,6 +165,16 @@ enum class sec : uint8_t {
   protocol_error,
   /// Encountered faulty logic in the program.
   logic_error,
+  /// An actor tried to delegate a message to an invalid actor handle.
+  invalid_delegate = 75,
+  /// An actor tried to delegate a message to an invalid actor handle.
+  invalid_request,
+  /// Signals that `future::get` timed out.
+  future_timeout,
+  /// Received invalid UTF-8 encoding.
+  invalid_utf8,
+  /// A downstream operator failed to process inputs on time.
+  backpressure_overflow,
 };
 // --(rst-sec-end)--
 

@@ -4,16 +4,16 @@
 
 #pragma once
 
+#include "caf/detail/build_config.hpp"
+#include "caf/detail/log_level.hpp"
+#include "caf/timestamp.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "caf/detail/build_config.hpp"
-#include "caf/detail/log_level.hpp"
-#include "caf/timestamp.hpp"
 
 // -- hard-coded default values for various CAF options ------------------------
 
@@ -94,9 +94,7 @@ constexpr auto buffer_size = int32_t{4096}; // // 32 KB for elements of size 8.
 namespace caf::defaults::scheduler {
 
 constexpr auto policy = std::string_view{"stealing"};
-constexpr auto profiling_output_file = std::string_view{""};
 constexpr auto max_throughput = std::numeric_limits<size_t>::max();
-constexpr auto profiling_resolution = timespan(100'000'000);
 
 } // namespace caf::defaults::scheduler
 
@@ -114,7 +112,7 @@ constexpr auto relaxed_sleep_duration = timespan{10'000'000};
 
 namespace caf::defaults::logger::file {
 
-constexpr auto format = std::string_view{"%r %c %p %a %t %C %M %F:%L %m%n"};
+constexpr auto format = std::string_view{"%r %c %p %a %t %M %F:%L %m%n"};
 constexpr auto path
   = std::string_view{"actor_log_[PID]_[TIMESTAMP]_[NODE].log"};
 
@@ -164,10 +162,16 @@ namespace caf::defaults::net {
 /// previous connection has been closed.
 constexpr auto max_connections = make_parameter("max-connections", size_t{64});
 
+/// Default maximum size for incoming HTTP requests: 64KiB.
+constexpr auto http_max_request_size = uint32_t{65'536};
+
 /// The default port for HTTP servers.
-constexpr uint16_t http_default_port = 80;
+constexpr auto http_default_port = uint16_t{80};
 
 /// The default port for HTTPS servers.
-constexpr uint16_t https_default_port = 443;
+constexpr auto https_default_port = uint16_t{443};
+
+/// The default buffer size for reading and writing octet streams.
+constexpr auto octet_stream_buffer_size = uint32_t{1024};
 
 } // namespace caf::defaults::net

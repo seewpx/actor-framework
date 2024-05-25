@@ -90,8 +90,6 @@ public:
 
   explicit json_reader(actor_system& sys);
 
-  explicit json_reader(execution_unit* ctx);
-
   json_reader(const json_reader&) = delete;
 
   json_reader& operator=(const json_reader&) = delete;
@@ -230,8 +228,6 @@ private:
   void append_current_field_name(std::string& str);
 
   std::string current_field_name();
-
-  std::string mandatory_field_missing_str(std::string_view name);
 
   template <bool PopOrAdvanceOnSuccess, class F>
   bool consume(const char* fun_name, F f);

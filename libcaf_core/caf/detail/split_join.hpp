@@ -4,11 +4,14 @@
 
 #pragma once
 
-#include <vector>
-
 #include "caf/actor.hpp"
 #include "caf/actor_system.hpp"
 #include "caf/event_based_actor.hpp"
+
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <vector>
 
 namespace caf::detail {
 
@@ -29,12 +32,13 @@ public:
   }
 
   behavior make_behavior() override {
-    auto f = [=](scheduled_actor*, message& msg) -> result<message> {
+    auto f = [this](scheduled_actor*, message& msg) -> result<message> {
       auto rp = this->make_response_promise();
       split_(workset_, msg);
       for (auto& x : workset_)
         this->send(x.first, std::move(x.second));
-      auto g = [=](scheduled_actor*, message& res) mutable -> result<message> {
+      auto g = [this, rp](scheduled_actor*,
+                          message& res) mutable -> result<message> {
         join_(value_, res);
         if (--awaited_results_ == 0) {
           rp.deliver(value_);
@@ -77,7 +81,7 @@ public:
 
   void operator()(actor_system& sys, std::unique_lock<std::shared_mutex>& ulock,
                   const std::vector<actor>& workers, mailbox_element_ptr& ptr,
-                  execution_unit* host) {
+                  scheduler* sched) {
     if (!ptr->sender)
       return;
     actor_msg_vec xs;
@@ -88,7 +92,7 @@ public:
     using collector_t = split_join_collector<T, Split, Join>;
     auto hdl = sys.spawn<collector_t, lazy_init>(init_, sf_, jf_,
                                                  std::move(xs));
-    hdl->enqueue(std::move(ptr), host);
+    hdl->enqueue(std::move(ptr), sched);
   }
 
 private:

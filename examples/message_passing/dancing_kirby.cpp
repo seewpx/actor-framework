@@ -1,20 +1,20 @@
-// This example illustrates how to do time-triggered loops in CAF.
+// This example illustrates how to do time-triggered loops in CAF using
+// delayed_send.
+
+#include "caf/actor_system.hpp"
+#include "caf/caf_main.hpp"
+#include "caf/event_based_actor.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <iostream>
-
-#include "caf/all.hpp"
-
-// This file is partially included in the manual, do not modify
-// without updating the references in the *.tex files!
-// Manual references: lines 58-75 (MessagePassing.tex)
 
 using std::cout;
 using std::endl;
 using std::pair;
 
 using namespace caf;
+using namespace std::literals;
 
 // ASCII art figures
 constexpr const char* figures[] = {
@@ -56,11 +56,10 @@ void draw_kirby(const animation_step& animation) {
 // --(rst-delayed-send-begin)--
 // uses a message-based loop to iterate over all animation steps
 behavior dancing_kirby(event_based_actor* self) {
-  using namespace std::literals::chrono_literals;
   // let's get it started
-  self->send(self, update_atom_v, size_t{0});
+  self->mail(update_atom_v, size_t{0}).send(self);
   return {
-    [=](update_atom, size_t step) {
+    [self](update_atom, size_t step) {
       if (step == sizeof(animation_step)) {
         // we've printed all animation steps (done)
         cout << endl;
@@ -70,7 +69,7 @@ behavior dancing_kirby(event_based_actor* self) {
       // print given step
       draw_kirby(animation_steps[step]);
       // schedule next animation step
-      self->delayed_send(self, 150ms, update_atom_v, step + 1);
+      self->mail(update_atom_v, step + 1).delay(150ms).send(self);
     },
   };
 }

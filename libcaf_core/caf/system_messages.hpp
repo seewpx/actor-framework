@@ -4,16 +4,15 @@
 
 #pragma once
 
-#include <cstdint>
-#include <type_traits>
-#include <vector>
-
 #include "caf/actor_addr.hpp"
 #include "caf/async/batch.hpp"
 #include "caf/deep_to_string.hpp"
 #include "caf/fwd.hpp"
-#include "caf/group.hpp"
 #include "caf/type_id.hpp"
+
+#include <cstdint>
+#include <type_traits>
+#include <vector>
 
 namespace caf {
 
@@ -31,6 +30,11 @@ struct exit_msg {
 /// @relates exit_msg
 inline bool operator==(const exit_msg& x, const exit_msg& y) noexcept {
   return x.source == y.source && x.reason == y.reason;
+}
+
+/// @relates exit_msg
+inline bool operator!=(const exit_msg& x, const exit_msg& y) noexcept {
+  return !(x == y);
 }
 
 /// @relates exit_msg
@@ -66,16 +70,15 @@ bool inspect(Inspector& f, down_msg& x) {
                             f.field("reason", x.reason));
 }
 
-/// Sent to all members of a group when it goes offline.
-struct group_down_msg {
-  /// The source of this message, i.e., the now unreachable group.
-  group source;
+/// Signals a timeout to an actor.
+struct timeout_msg {
+  uint64_t id;
 };
 
-/// @relates group_down_msg
+/// @relates timeout_msg
 template <class Inspector>
-bool inspect(Inspector& f, group_down_msg& x) {
-  return f.object(x).fields(f.field("source", x.source));
+bool inspect(Inspector& f, timeout_msg& x) {
+  return f.object(x).fields(f.field("id", x.id));
 }
 
 /// Sent to all actors monitoring a node when CAF loses connection to it.

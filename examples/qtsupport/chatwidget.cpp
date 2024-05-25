@@ -1,10 +1,10 @@
-#include <string>
-#include <string_view>
-#include <utility>
-
 #include "caf/all.hpp"
 #include "caf/detail/scope_guard.hpp"
 #include "caf/scheduled_actor/flow.hpp"
+
+#include <string>
+#include <string_view>
+#include <utility>
 
 CAF_PUSH_WARNINGS
 #include <QInputDialog>
@@ -44,7 +44,9 @@ void ChatWidget::init(actor_system& system, const std::string& name,
       auto str = std::string_view{reinterpret_cast<const char*>(bytes.data()),
                                   bytes.size()};
       if (std::all_of(str.begin(), str.end(), ::isprint)) {
-        print(QString::fromUtf8(str.data(), str.size()));
+        auto qstr = QString::fromUtf8(str.data(),
+                                      static_cast<qsizetype>(str.size()));
+        print(qstr);
       } else {
         QString msg = "<non-ascii-data of size ";
         msg += QString::number(bytes.size());
@@ -69,7 +71,6 @@ void ChatWidget::init(actor_system& system, const std::string& name,
 }
 
 void ChatWidget::sendChatMessage() {
-  auto cleanup = detail::make_scope_guard([=] { input()->setText(QString()); });
   QString line = input()->text();
   if (line.isEmpty()) {
     // Ignore empty lines.
@@ -86,7 +87,6 @@ void ChatWidget::sendChatMessage() {
     } else {
       print("*** list of commands:\n"
             "/setName <new name>\n");
-      return;
     }
   } else {
     auto msg = name_;
@@ -97,6 +97,7 @@ void ChatWidget::sendChatMessage() {
       publisher_->push(msg);
     }
   }
+  input()->setText(QString());
 }
 
 void ChatWidget::changeName() {

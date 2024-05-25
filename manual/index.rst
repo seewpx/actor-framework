@@ -12,16 +12,18 @@ Contents
 
    Introduction
    Overview
+   MessagePassing
    TypeInspection
+   Hashing
    MessageHandlers
    Actors
-   MessagePassing
    Scheduler
    Registry
    ReferenceCounting
    Error
    ConfiguringActorApplications
-   ManagingGroupsOfWorkers
+   CopyOnWriteTypes
+   TypedMessageView
    DataFlows
    Testing
    Metrics
@@ -52,4 +54,3 @@ Contents
 
    FAQ
    CommonPitfalls
-   UsingAout

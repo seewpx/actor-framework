@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include "caf/async/consumer.hpp"
 #include "caf/detail/atomic_ref_counted.hpp"
 #include "caf/detail/scope_guard.hpp"
+#include "caf/disposable.hpp"
 #include "caf/flow/observer.hpp"
 #include "caf/flow/op/hot.hpp"
 #include "caf/flow/subscription.hpp"
+#include "caf/log/core.hpp"
 #include "caf/sec.hpp"
 
 #include <utility>
@@ -19,6 +22,7 @@ namespace caf::flow::op {
 template <class Buffer>
 class from_resource_sub : public detail::atomic_ref_counted,
                           public subscription::impl,
+                          public disposable::impl,
                           public async::consumer {
 public:
   // -- member types -----------------------------------------------------------
@@ -29,32 +33,51 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  from_resource_sub(coordinator* ctx, buffer_ptr buf, observer<value_type> out)
-    : ctx_(ctx), buf_(buf), out_(std::move(out)) {
-    ctx_->ref_execution_context();
+  from_resource_sub(coordinator* parent, buffer_ptr buf,
+                    observer<value_type> out)
+    : parent_(parent), buf_(buf), out_(std::move(out)) {
+    parent_->ref_execution_context();
   }
 
   ~from_resource_sub() {
-    ctx_->deref_execution_context();
+    parent_->deref_execution_context();
   }
 
   // -- implementation of subscription_impl ------------------------------------
+
+  coordinator* parent() const noexcept override {
+    return parent_.get();
+  }
 
   bool disposed() const noexcept override {
     return disposed_;
   }
 
   void dispose() override {
-    CAF_LOG_TRACE("");
-    if (!disposed_) {
-      disposed_ = true;
-      if (!running_)
-        do_dispose();
+    auto lg = log::core::trace("");
+    if (disposed_)
+      return;
+    disposed_ = true;
+    run_later();
+  }
+
+  void cancel() override {
+    auto lg = log::core::trace("");
+    if (disposed_)
+      return;
+    disposed_ = true;
+    if (!running_) {
+      if (buf_) {
+        buf_->cancel();
+        buf_ = nullptr;
+      }
+      out_.release_later();
     }
+    // else: called from do_run. Just tag as disposed.
   }
 
   void request(size_t n) override {
-    CAF_LOG_TRACE(CAF_ARG(n));
+    auto lg = log::core::trace("n = {}", n);
     if (demand_ != 0) {
       demand_ += n;
     } else {
@@ -70,11 +93,13 @@ public:
   }
 
   void on_producer_wakeup() override {
-    CAF_LOG_TRACE("");
-    ctx_->schedule_fn([ptr = strong_this()] {
-      CAF_LOG_TRACE("");
-      ptr->running_ = true;
-      ptr->do_run();
+    auto lg = log::core::trace("");
+    parent_->schedule_fn([ptr = strong_this()] {
+      auto lg = log::core::trace("");
+      if (!ptr->disposed_) {
+        ptr->running_ = true;
+        ptr->do_run();
+      }
     });
   }
 
@@ -88,19 +113,27 @@ public:
     ptr->deref();
   }
 
-  void ref_consumer() const noexcept final {
+  void ref_consumer() const noexcept override {
     this->ref();
   }
 
-  void deref_consumer() const noexcept final {
+  void deref_consumer() const noexcept override {
     this->deref();
   }
 
-  void ref_disposable() const noexcept final {
+  void ref_disposable() const noexcept override {
     this->ref();
   }
 
-  void deref_disposable() const noexcept final {
+  void deref_disposable() const noexcept override {
+    this->deref();
+  }
+
+  void ref_coordinated() const noexcept override {
+    this->ref();
+  }
+
+  void deref_coordinated() const noexcept override {
     this->deref();
   }
 
@@ -108,46 +141,50 @@ private:
   void run_later() {
     if (!running_) {
       running_ = true;
-      ctx_->delay_fn([ptr = strong_this()] { ptr->do_run(); });
-    }
-  }
-
-  void do_dispose() {
-    if (buf_) {
-      auto tmp = std::move(buf_);
-      tmp->cancel();
-    }
-    if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_complete();
+      parent_->delay_fn([ptr = strong_this()] {
+        if (!ptr->disposed_) {
+          ptr->do_run();
+          return;
+        }
+        ptr->running_ = false;
+      });
     }
   }
 
   void do_run() {
-    CAF_LOG_TRACE("");
-    auto guard = detail::make_scope_guard([this] { running_ = false; });
-    if (disposed_) {
-      do_dispose();
-      return;
-    }
+    auto lg = log::core::trace("");
+    auto guard = detail::scope_guard([this]() noexcept { running_ = false; });
     CAF_ASSERT(out_);
     CAF_ASSERT(buf_);
+    if (disposed_) {
+      if (buf_) {
+        buf_->cancel();
+        buf_ = nullptr;
+      }
+      if (out_)
+        out_.on_error(make_error(sec::disposed));
+      return;
+    }
     while (demand_ > 0) {
       auto [again, pulled] = buf_->pull(async::delay_errors, demand_, out_);
       if (!again) {
-        buf_ = nullptr;
-        out_ = nullptr;
+        // The buffer must call on_complete or on_error before it returns false.
+        CAF_ASSERT(!out_);
         disposed_ = true;
+        buf_ = nullptr;
         return;
-      } else if (disposed_) {
-        do_dispose();
-        return;
-      } else if (pulled == 0) {
-        return;
-      } else {
-        CAF_ASSERT(demand_ >= pulled);
-        demand_ -= pulled;
       }
+      if (disposed_) {
+        buf_->cancel();
+        buf_ = nullptr;
+        out_.release_later();
+        return;
+      }
+      if (pulled == 0) {
+        return;
+      }
+      CAF_ASSERT(demand_ >= pulled);
+      demand_ -= pulled;
     }
   }
 
@@ -158,12 +195,12 @@ private:
   /// Stores the @ref coordinator that runs this flow. Unlike other observables,
   /// we need a strong reference to the coordinator because otherwise the buffer
   /// might call `schedule_fn` on a destroyed object.
-  intrusive_ptr<coordinator> ctx_;
+  intrusive_ptr<coordinator> parent_;
 
   /// Stores a pointer to the asynchronous input buffer.
   buffer_ptr buf_;
 
-  /// Stores a pointer to the target observer running on `remote_ctx_`.
+  /// Stores a pointer to the target observer running on `remote_parent_`.
   observer<value_type> out_;
 
   /// Stores whether do_run is currently running.
@@ -187,42 +224,39 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  from_resource(coordinator* ctx, resource_type resource)
-    : super(ctx), resource_(std::move(resource)) {
+  from_resource(coordinator* parent, resource_type resource)
+    : super(parent), resource_(std::move(resource)) {
     // nop
   }
 
   // -- implementation of observable_impl<T> -----------------------------------
 
   disposable subscribe(observer<T> out) override {
-    CAF_LOG_TRACE("");
+    auto lg = log::core::trace("");
     CAF_ASSERT(out);
     if (resource_) {
       if (auto buf = resource_.try_open()) {
         resource_ = nullptr;
         using buffer_type = typename resource_type::buffer_type;
-        CAF_LOG_DEBUG("add subscriber");
+        log::core::debug("add subscriber");
         using impl_t = from_resource_sub<buffer_type>;
-        auto ptr = make_counted<impl_t>(super::ctx_, buf, out);
+        auto ptr = super::parent_->add_child(std::in_place_type<impl_t>, buf,
+                                             out);
         buf->set_consumer(ptr);
-        super::ctx_->watch(ptr->as_disposable());
+        super::parent_->watch(ptr->as_disposable());
         out.on_subscribe(subscription{ptr});
         return ptr->as_disposable();
-      } else {
-        resource_ = nullptr;
-        CAF_LOG_WARNING("failed to open an async resource");
-        auto err = make_error(sec::cannot_open_resource,
-                              "failed to open an async resource");
-        out.on_error(err);
-        return disposable{};
       }
-    } else {
-      CAF_LOG_WARNING("may only subscribe once to an async resource");
-      auto err = make_error(sec::too_many_observers,
-                            "may only subscribe once to an async resource");
-      out.on_error(err);
-      return disposable{};
+      resource_ = nullptr;
+      log::core::warning("failed to open an async resource");
+      return super::fail_subscription(
+        out, make_error(sec::cannot_open_resource,
+                        "failed to open an async resource"));
     }
+    log::core::warning("may only subscribe once to an async resource");
+    return super::fail_subscription(
+      out, make_error(sec::too_many_observers,
+                      "may only subscribe once to an async resource"));
   }
 
 private:

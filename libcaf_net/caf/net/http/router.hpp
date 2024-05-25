@@ -4,17 +4,16 @@
 
 #pragma once
 
-#include "caf/detail/print.hpp"
-#include "caf/detail/type_list.hpp"
-#include "caf/detail/type_traits.hpp"
-#include "caf/expected.hpp"
-#include "caf/intrusive_ptr.hpp"
 #include "caf/net/actor_shell.hpp"
 #include "caf/net/http/arg_parser.hpp"
 #include "caf/net/http/lower_layer.hpp"
 #include "caf/net/http/responder.hpp"
 #include "caf/net/http/route.hpp"
 #include "caf/net/http/upper_layer.hpp"
+
+#include "caf/detail/print.hpp"
+#include "caf/expected.hpp"
+#include "caf/intrusive_ptr.hpp"
 #include "caf/ref_counted.hpp"
 
 #include <algorithm>
@@ -27,7 +26,7 @@ namespace caf::net::http {
 
 /// Sits on top of a @ref server and dispatches incoming requests to
 /// user-defined handlers.
-class CAF_NET_EXPORT router : public upper_layer {
+class CAF_NET_EXPORT router : public upper_layer::server {
 public:
   // -- constructors and destructors -------------------------------------------
 
@@ -46,7 +45,7 @@ public:
   // -- properties -------------------------------------------------------------
 
   /// Returns a pointer to the underlying HTTP layer.
-  lower_layer* down() {
+  lower_layer::server* down() {
     return down_;
   }
 
@@ -64,7 +63,7 @@ public:
 
   // -- http::upper_layer implementation ---------------------------------------
 
-  error start(lower_layer* down) override;
+  error start(lower_layer::server* down) override;
 
   ptrdiff_t consume(const request_header& hdr,
                     const_byte_span payload) override;
@@ -77,7 +76,7 @@ public:
 
 private:
   /// Handle to the underlying HTTP layer.
-  lower_layer* down_ = nullptr;
+  lower_layer::server* down_ = nullptr;
 
   /// List of user-defined routes.
   std::vector<route_ptr> routes_;

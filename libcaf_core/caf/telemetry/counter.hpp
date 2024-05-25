@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <type_traits>
-
-#include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/fwd.hpp"
 #include "caf/span.hpp"
 #include "caf/telemetry/gauge.hpp"
 #include "caf/telemetry/label.hpp"
+
+#include <type_traits>
 
 namespace caf::telemetry {
 
@@ -26,9 +26,9 @@ public:
 
   // -- constants --------------------------------------------------------------
 
-  static constexpr metric_type runtime_type
-    = std::is_same<value_type, double>::value ? metric_type::dbl_counter
-                                              : metric_type::int_counter;
+  static constexpr metric_type runtime_type = std::is_same_v<value_type, double>
+                                                ? metric_type::dbl_counter
+                                                : metric_type::int_counter;
 
   // -- constructors, destructors, and assignment operators --------------------
 
@@ -50,17 +50,24 @@ public:
   }
 
   /// Increments the counter by `amount`.
-  /// @pre `amount > 0`
+  /// @pre `amount >= 0`
   void inc(value_type amount) noexcept {
-    CAF_ASSERT(amount > 0);
+    CAF_ASSERT(amount >= 0);
     gauge_.inc(amount);
   }
 
   /// Increments the counter by 1.
   /// @returns The new value of the counter.
   template <class T = ValueType>
-  std::enable_if_t<std::is_same<T, int64_t>::value, T> operator++() noexcept {
+  std::enable_if_t<std::is_same_v<T, int64_t>, T> operator++() noexcept {
     return ++gauge_;
+  }
+
+  /// Increments the counter by 1.
+  /// @returns The old value of the counter.
+  template <class T = ValueType>
+  std::enable_if_t<std::is_same_v<T, int64_t>, T> operator++(int) noexcept {
+    return gauge_++;
   }
 
   // -- observers --------------------------------------------------------------

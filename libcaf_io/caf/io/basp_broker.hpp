@@ -4,6 +4,18 @@
 
 #pragma once
 
+#include "caf/io/basp/all.hpp"
+#include "caf/io/broker.hpp"
+#include "caf/io/typed_broker.hpp"
+
+#include "caf/binary_deserializer.hpp"
+#include "caf/binary_serializer.hpp"
+#include "caf/byte_buffer.hpp"
+#include "caf/detail/io_export.hpp"
+#include "caf/forwarding_actor_proxy.hpp"
+#include "caf/proxy_registry.hpp"
+#include "caf/stateful_actor.hpp"
+
 #include <future>
 #include <map>
 #include <set>
@@ -12,17 +24,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-#include "caf/binary_deserializer.hpp"
-#include "caf/binary_serializer.hpp"
-#include "caf/byte_buffer.hpp"
-#include "caf/detail/io_export.hpp"
-#include "caf/forwarding_actor_proxy.hpp"
-#include "caf/io/basp/all.hpp"
-#include "caf/io/broker.hpp"
-#include "caf/io/typed_broker.hpp"
-#include "caf/proxy_registry.hpp"
-#include "caf/stateful_actor.hpp"
 
 namespace caf::io {
 
@@ -56,7 +57,7 @@ public:
 
   proxy_registry* proxy_registry_ptr() override;
 
-  resume_result resume(execution_unit*, size_t) override;
+  resume_result resume(scheduler*, size_t) override;
 
   // -- implementation of proxy_registry::backend ------------------------------
 
@@ -84,7 +85,7 @@ public:
 
   void handle_heartbeat() override;
 
-  execution_unit* current_execution_unit() override;
+  scheduler* current_scheduler() override;
 
   strong_actor_ptr this_actor() override;
 
@@ -105,9 +106,6 @@ public:
 
   /// Sends a basp::down_message message to a remote node.
   void send_basp_down_message(const node_id& nid, actor_id aid, error err);
-
-  // Sends basp::down_message to all nodes monitoring the terminated actor.
-  void handle_down_msg(down_msg&);
 
   // -- disambiguation for functions found in multiple base classes ------------
 

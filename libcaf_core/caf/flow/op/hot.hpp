@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "caf/detail/plain_ref_counted.hpp"
+#include "caf/detail/atomic_ref_counted.hpp"
 #include "caf/flow/observer.hpp"
 #include "caf/flow/op/base.hpp"
 #include "caf/flow/subscription.hpp"
@@ -13,15 +13,11 @@ namespace caf::flow::op {
 
 /// Convenience base type for *hot* observable types.
 template <class T>
-class hot : public detail::plain_ref_counted, public base<T> {
+class hot : public detail::atomic_ref_counted, public base<T> {
 public:
-  // -- member types -----------------------------------------------------------
-
-  using output_type = T;
-
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit hot(coordinator* ctx) : ctx_(ctx) {
+  explicit hot(coordinator* parent) : parent_(parent) {
     // nop
   }
 
@@ -37,14 +33,14 @@ public:
 
   // -- implementation of observable_impl<T> -----------------------------------
 
-  coordinator* ctx() const noexcept override {
-    return ctx_;
+  coordinator* parent() const noexcept override {
+    return parent_;
   }
 
 protected:
   // -- member variables -------------------------------------------------------
 
-  coordinator* ctx_;
+  coordinator* parent_;
 };
 
 } // namespace caf::flow::op

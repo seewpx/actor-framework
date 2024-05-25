@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <type_traits>
-
 #include "caf/actor.hpp"
-#include "caf/detail/type_list.hpp"
 #include "caf/fwd.hpp"
+#include "caf/type_list.hpp"
+
+#include <type_traits>
 
 namespace caf::detail {
 
@@ -22,7 +22,7 @@ struct mtl_util<result<Rs...>(Ts...)> {
   send(Self& self, const actor& dst, Adapter& adapter, Inspector& f, Ts... xs) {
     f.revert();
     if (adapter.read(f, xs...)) {
-      self->send(dst, std::move(xs)...);
+      self->mail(std::move(xs)...).send(dst);
       return true;
     } else {
       return false;
@@ -42,12 +42,14 @@ struct mtl_util<result<Rs...>(Ts...)> {
                       OnError& on_error, Ts... xs) {
     f.revert();
     if (adapter.read(f, xs...)) {
-      if constexpr (std::is_same<type_list<Rs...>, type_list<void>>::value)
-        self->request(dst, timeout, std::move(xs)...)
+      if constexpr (std::is_same_v<type_list<Rs...>, type_list<void>>)
+        self->mail(std::move(xs)...)
+          .request(dst, timeout)
           .then([f{std::move(on_result)}]() mutable { f(); },
                 std::move(on_error));
       else
-        self->request(dst, timeout, std::move(xs)...)
+        self->mail(std::move(xs)...)
+          .request(dst, timeout)
           .then([f{std::move(on_result)}](Rs&... res) mutable { f(res...); },
                 std::move(on_error));
       return true;

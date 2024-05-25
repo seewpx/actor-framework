@@ -1,8 +1,17 @@
-// A very basic, interactive divider.
+// A very basic, interactive divider that showcases how to return an error with
+// custom error code from a message handler.
+
+#include "caf/actor_ostream.hpp"
+#include "caf/actor_system.hpp"
+#include "caf/caf_main.hpp"
+#include "caf/default_enum_inspect.hpp"
+#include "caf/event_based_actor.hpp"
+#include "caf/scoped_actor.hpp"
+#include "caf/typed_event_based_actor.hpp"
 
 #include <iostream>
 
-#include "caf/all.hpp"
+using namespace std::literals;
 
 // --(rst-math-error-begin)--
 enum class math_error : uint8_t {
@@ -57,7 +66,11 @@ using std::flush;
 using namespace caf;
 
 // --(rst-divider-begin)--
-using divider = typed_actor<result<double>(div_atom, double, double)>;
+struct divider_trait {
+  using signatures = type_list<result<double>(div_atom, double, double)>;
+};
+
+using divider = typed_actor<divider_trait>;
 
 divider::behavior_type divider_impl() {
   return {
@@ -80,13 +93,12 @@ void caf_main(actor_system& system) {
   // --(rst-request-begin)--
   auto div = system.spawn(divider_impl);
   scoped_actor self{system};
-  self->request(div, std::chrono::seconds(10), div_atom_v, x, y)
-    .receive(
-      [&](double z) { aout(self) << x << " / " << y << " = " << z << endl; },
-      [&](const error& err) {
-        aout(self) << "*** cannot compute " << x << " / " << y << " => "
-                   << to_string(err) << endl;
-      });
+  self->mail(div_atom_v, x, y)
+    .request(div, 10s)
+    .receive([&](double z) { self->println("{} / {} = {}", x, y, z); },
+             [&](const error& err) {
+               self->println("*** cannot compute {} / {} => {}", x, y, err);
+             });
   // --(rst-request-end)--
 }
 

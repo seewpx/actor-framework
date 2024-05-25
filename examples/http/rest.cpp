@@ -3,22 +3,27 @@
 // is not aware of HTTP and the HTTP server is sending regular request messages
 // to actor.
 
+#include "caf/net/http/with.hpp"
+#include "caf/net/middleman.hpp"
+
+#include "caf/actor_from_state.hpp"
 #include "caf/actor_system.hpp"
 #include "caf/actor_system_config.hpp"
 #include "caf/caf_main.hpp"
 #include "caf/deep_to_string.hpp"
+#include "caf/defaults.hpp"
 #include "caf/event_based_actor.hpp"
-#include "caf/net/http/with.hpp"
-#include "caf/net/middleman.hpp"
+#include "caf/format_to_error.hpp"
 #include "caf/scheduled_actor/flow.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
-#include <iostream>
+#include <csignal>
 #include <string>
 #include <utility>
 
-namespace http = caf::net::http;
+using namespace std::literals;
 
 // -- constants ----------------------------------------------------------------
 
@@ -32,10 +37,20 @@ struct config : caf::actor_system_config {
   config() {
     opt_group{custom_options_, "global"} //
       .add<uint16_t>("port,p", "port to listen for incoming connections")
-      .add<size_t>("max-connections,m", "limit for concurrent clients");
+      .add<size_t>("max-connections,m", "limit for concurrent clients")
+      .add<size_t>("max-request-size,r", "limit for single request size");
     opt_group{custom_options_, "tls"} //
       .add<std::string>("key-file,k", "path to the private key file")
       .add<std::string>("cert-file,c", "path to the certificate file");
+  }
+
+  caf::settings dump_content() const override {
+    auto result = actor_system_config::dump_content();
+    caf::put_missing(result, "port", default_port);
+    caf::put_missing(result, "max-connections", default_max_connections);
+    caf::put_missing(result, "max-request-size",
+                     caf::defaults::net::http_max_request_size);
+    return result;
   }
 };
 
@@ -49,7 +64,7 @@ struct kvs_actor_state {
         if (auto i = data.find(key); i != data.end())
           return i->second;
         else
-          return make_error(caf::sec::no_such_key, key + " not found");
+          return format_to_error(caf::sec::no_such_key, "{} not found", key);
       },
       [this](caf::put_atom, const std::string& key, std::string& value) {
         data.insert_or_assign(key, std::move(value));
@@ -60,8 +75,6 @@ struct kvs_actor_state {
 
   std::map<std::string, std::string> data;
 };
-
-using kvs_actor_impl = caf::stateful_actor<kvs_actor_state>;
 
 // -- utility functions --------------------------------------------------------
 
@@ -77,9 +90,22 @@ std::string to_ascii(caf::span<const std::byte> buffer) {
 
 // -- main ---------------------------------------------------------------------
 
+namespace {
+
+std::atomic<bool> shutdown_flag;
+
+void set_shutdown_flag(int) {
+  shutdown_flag = true;
+}
+
+} // namespace
+
 int caf_main(caf::actor_system& sys, const config& cfg) {
-  using namespace std::literals;
   namespace ssl = caf::net::ssl;
+  namespace http = caf::net::http;
+  // Do a regular shutdown for CTRL+C and SIGTERM.
+  signal(SIGTERM, set_shutdown_flag);
+  signal(SIGINT, set_shutdown_flag);
   // Read the configuration.
   auto port = caf::get_or(cfg, "port", default_port);
   auto pem = ssl::format::pem;
@@ -87,12 +113,14 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
   auto cert_file = caf::get_as<std::string>(cfg, "tls.cert-file");
   auto max_connections = caf::get_or(cfg, "max-connections",
                                      default_max_connections);
+  auto max_request_size = caf::get_or(
+    cfg, "max-request-size", caf::defaults::net::http_max_request_size);
   if (!key_file != !cert_file) {
-    std::cerr << "*** inconsistent TLS config: declare neither file or both\n";
+    sys.println("*** inconsistent TLS config: declare neither file or both");
     return EXIT_FAILURE;
   }
   // Spin up our key-value store actor.
-  auto kvs = sys.spawn<kvs_actor_impl>();
+  auto kvs = sys.spawn(caf::actor_from_state<kvs_actor_state>);
   // Open up a TCP port for incoming connections and start the server.
   auto server
     = http::with(sys)
@@ -105,6 +133,8 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
         .accept(port)
         // Limit how many clients may be connected at any given time.
         .max_connections(max_connections)
+        // Limit the maximum request size.
+        .max_request_size(max_request_size)
         // Stop the server if our key-value store actor terminates.
         .monitor(kvs)
         // Forward incoming requests to the kvs actor.
@@ -168,12 +198,14 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
         .start();
   // Report any error to the user.
   if (!server) {
-    std::cerr << "*** unable to run at port " << port << ": "
-              << to_string(server.error()) << '\n';
+    sys.println("*** unable to run at port {}: {}", port, server.error());
     return EXIT_FAILURE;
   }
-  // Note: the actor system will keep the application running for as long as the
-  // kvs actor stays alive.
+  // Wait for CTRL+C or SIGTERM.
+  while (!shutdown_flag)
+    std::this_thread::sleep_for(250ms);
+  sys.println("*** shutting down");
+  server->dispose();
   return EXIT_SUCCESS;
 }
 

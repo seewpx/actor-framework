@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-
 #include "caf/detail/core_export.hpp"
 #include "caf/fwd.hpp"
 #include "caf/uri.hpp"
+
+#include <cstdint>
+#include <string>
 
 namespace caf {
 
@@ -33,6 +33,8 @@ public:
   uri_builder& scheme(std::string str);
 
   uri_builder& userinfo(std::string str);
+
+  uri_builder& userinfo(std::string str, std::string password);
 
   uri_builder& host(std::string str);
 

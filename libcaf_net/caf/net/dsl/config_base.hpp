@@ -4,19 +4,21 @@
 
 #pragma once
 
-#include "caf/callback.hpp"
-#include "caf/defaults.hpp"
-#include "caf/detail/net_export.hpp"
-#include "caf/error.hpp"
-#include "caf/intrusive_ptr.hpp"
 #include "caf/net/checked_socket.hpp"
 #include "caf/net/dsl/base.hpp"
 #include "caf/net/dsl/get_name.hpp"
-#include "caf/net/dsl/has_ctx.hpp"
+#include "caf/net/dsl/has_make_ctx.hpp"
 #include "caf/net/fwd.hpp"
 #include "caf/net/ssl/connection.hpp"
 #include "caf/net/ssl/context.hpp"
 #include "caf/net/stream_socket.hpp"
+
+#include "caf/callback.hpp"
+#include "caf/defaults.hpp"
+#include "caf/detail/net_export.hpp"
+#include "caf/error.hpp"
+#include "caf/format_to_error.hpp"
+#include "caf/intrusive_ptr.hpp"
 #include "caf/ref_counted.hpp"
 #include "caf/sec.hpp"
 #include "caf/uri.hpp"
@@ -47,21 +49,22 @@ public:
 
   virtual error fail_reason() const = 0;
 
-  /// Convenience function for setting a default error if `as_has_ctx` returns
-  /// `nullptr` while trying to set an SSL context.
+  /// Convenience function for setting a default error if `as_has_make_ctx`
+  /// returns `nullptr` while trying to set an SSL context.
   error cannot_add_ctx() {
-    return make_error(sec::logic_error,
-                      "cannot add an SSL context to a config of type "
-                        + std::string{name()});
+    return format_to_error(sec::logic_error,
+                           "cannot add an SSL context or context factory "
+                           "to a config of type {}",
+                           name());
   }
 
   /// Inspects the data of this configuration and returns a pointer to it as
-  /// `has_ctx` instance if possible, `nullptr` otherwise.
-  virtual has_ctx* as_has_ctx() noexcept = 0;
+  /// `has_make_ctx` instance if possible, `nullptr` otherwise.
+  virtual has_make_ctx* as_has_make_ctx() noexcept = 0;
 
   /// Inspects the data of this configuration and returns a pointer to it as
-  /// `has_ctx` instance if possible, `nullptr` otherwise.
-  virtual const has_ctx* as_has_ctx() const noexcept = 0;
+  /// `has_make_ctx` instance if possible, `nullptr` otherwise.
+  virtual const has_make_ctx* as_has_make_ctx() const noexcept = 0;
 
   bool failed() const noexcept {
     return name() == get_name<error>::value;
@@ -93,11 +96,7 @@ class config_impl : public config_base {
 public:
   using super = config_base;
 
-  template <class... Args>
-  explicit config_impl(const config_base& from, Args&&... args)
-    : super(from), data(std::forward<Args>(args)...) {
-    // nop
-  }
+  using variant_type = std::variant<error, Data...>;
 
   template <class... Args>
   explicit config_impl(multiplexer* mpx, Args&&... args)
@@ -105,7 +104,13 @@ public:
     // nop
   }
 
-  std::variant<error, Data...> data;
+  template <class... Args>
+  explicit config_impl(const config_base& from, Args&&... args)
+    : super(from), data(std::forward<Args>(args)...) {
+    // nop
+  }
+
+  variant_type data;
 
   template <class F>
   auto visit(F&& f) {
@@ -114,7 +119,7 @@ public:
 
   /// Returns the name of the configuration type.
   std::string_view name() const noexcept override {
-    auto f = [](const auto& val) {
+    auto f = [](const auto& val) noexcept {
       using val_t = std::decay_t<decltype(val)>;
       return get_name<val_t>::value;
     };
@@ -133,12 +138,31 @@ public:
       return {};
   }
 
-  has_ctx* as_has_ctx() noexcept override {
-    return has_ctx::from(data);
+  has_make_ctx* as_has_make_ctx() noexcept override {
+    return has_make_ctx::from(data);
   }
 
-  const has_ctx* as_has_ctx() const noexcept override {
-    return has_ctx::from(data);
+  const has_make_ctx* as_has_make_ctx() const noexcept override {
+    return has_make_ctx::from(data);
+  }
+
+  template <class From, class Token, class... Args>
+  void assign(const From& from, Token, Args&&... args) {
+    // Always construct the data in-place first. This makes sure we account
+    // for ownership transfers (e.g. for sockets).
+    data.template emplace<typename Token::type>(std::forward<Args>(args)...);
+    // Discard the data if `from` contained an error. Otherwise, transfer the
+    // SSL context over to the refined configuration.
+    if (!from) {
+      data.template emplace<error>(std::get<error>(from.data));
+    } else if (auto* dst = this->as_has_make_ctx()) {
+      if (const auto* src = from.as_has_make_ctx()) {
+        dst->assign(src);
+      } else {
+        data = make_error(caf::sec::logic_error,
+                          "failed to transfer SSL context");
+      }
+    }
   }
 
 protected:
@@ -153,9 +177,9 @@ protected:
     // SSL context over to the refined configuration.
     if (!from) {
       ptr->data.template emplace<error>(std::get<error>(from.data));
-    } else if (auto* dst = ptr->as_has_ctx()) {
-      if (const auto* src = from.as_has_ctx()) {
-        dst->ctx = src->ctx;
+    } else if (auto* dst = ptr->as_has_make_ctx()) {
+      if (const auto* src = from.as_has_make_ctx()) {
+        dst->assign(src);
       } else {
         ptr->data = make_error(caf::sec::logic_error,
                                "failed to transfer SSL context");

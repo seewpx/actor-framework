@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-
 #include "caf/config.hpp"
 #include "caf/detail/parser/chars.hpp"
 #include "caf/detail/parser/is_char.hpp"
 #include "caf/detail/scope_guard.hpp"
 #include "caf/pec.hpp"
+
+#include <cstdint>
+#include <string>
 
 CAF_PUSH_UNUSED_LABEL_WARNING
 
@@ -23,10 +23,6 @@ namespace caf::detail::parser {
 template <class State, class Consumer>
 void read_bool(State& ps, Consumer&& consumer) {
   bool res = false;
-  auto g = make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character)
-      consumer.value(std::move(res));
-  });
   // clang-format off
   start();
   state(init) {
@@ -59,6 +55,8 @@ void read_bool(State& ps, Consumer&& consumer) {
   }
   fin();
   // clang-format on
+  if (ps.code <= pec::trailing_character)
+    consumer.value(std::move(res));
 }
 
 } // namespace caf::detail::parser

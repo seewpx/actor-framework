@@ -4,163 +4,112 @@
 
 #pragma once
 
-#include <cstring>
-#include <fstream>
-#include <iostream>
-#include <sstream>
-#include <string_view>
-#include <thread>
-#include <type_traits>
-#include <typeinfo>
-#include <unordered_map>
-
-#include "caf/abstract_actor.hpp"
 #include "caf/config.hpp"
 #include "caf/deep_to_string.hpp"
 #include "caf/detail/arg_wrapper.hpp"
 #include "caf/detail/core_export.hpp"
+#include "caf/detail/format.hpp"
 #include "caf/detail/log_level.hpp"
 #include "caf/detail/pp.hpp"
 #include "caf/detail/pretty_type_name.hpp"
-#include "caf/detail/ringbuffer.hpp"
 #include "caf/detail/scope_guard.hpp"
+#include "caf/format_string_with_location.hpp"
 #include "caf/fwd.hpp"
-#include "caf/intrusive/drr_queue.hpp"
-#include "caf/intrusive/fifo_inbox.hpp"
-#include "caf/intrusive/singly_linked.hpp"
-#include "caf/ref_counted.hpp"
-#include "caf/timestamp.hpp"
+#include "caf/log/event.hpp"
+#include "caf/log/level.hpp"
 
-/*
- * To enable logging, you have to define CAF_DEBUG. This enables
- * CAF_LOG_ERROR messages. To enable more debugging output, you can
- * define CAF_LOG_LEVEL to:
- * 1: + warning
- * 2: + info
- * 3: + debug
- * 4: + trace (prints for each logged method entry and exit message)
- *
- * Note: this logger emits log4j style output; logs are best viewed
- *       using a log4j viewer, e.g., http://code.google.com/p/otroslogviewer/
- *
- */
+#include <cstring>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <typeinfo>
+
 namespace caf {
 
 /// Centrally logs events from all actors in an actor system. To enable
 /// logging in your application, you need to define `CAF_LOG_LEVEL`. Per
 /// default, the logger generates log4j compatible output.
-class CAF_CORE_EXPORT logger : public ref_counted {
+class CAF_CORE_EXPORT logger {
 public:
   // -- friends ----------------------------------------------------------------
 
+  class trace_exit_guard;
+
   friend class actor_system;
 
-  // -- constants --------------------------------------------------------------
+  friend class detail::actor_system_access;
 
-  /// Configures the size of the circular event queue.
-  static constexpr size_t queue_size = 128;
+  friend class trace_exit_guard;
+
+  friend class log::event_sender;
 
   // -- member types -----------------------------------------------------------
 
-  /// Combines various logging-related flags and parameters into a bitfield.
-  struct config {
-    /// Stores `max(file_verbosity, console_verbosity)`.
-    unsigned verbosity : 4;
+  /// Provides an API entry point for sending a log event to the current logger.
+  class entrypoint {
+  public:
+    entrypoint(unsigned level, std::string_view component,
+               detail::source_location loc)
+      : level_(level), component_(component), loc_(loc) {
+      // nop
+    }
 
-    /// Configures the verbosity for file output.
-    unsigned file_verbosity : 4;
+    template <class... Args>
+    log::event_sender message(std::string_view fmt, Args&&... args) {
+      auto* instance = current_logger();
+      if (instance && instance->accepts(level_, component_)) {
+        return {instance,
+                level_,
+                component_,
+                loc_,
+                logger::thread_local_aid(),
+                fmt,
+                std::forward<Args>(args)...};
+      }
+      return {};
+    }
 
-    /// Configures the verbosity for console output.
-    unsigned console_verbosity : 4;
-
-    /// Configures whether the logger immediately writes its output in the
-    /// calling thread, bypassing its queue. Use this option only in
-    /// single-threaded test environments.
-    bool inline_output : 1;
-
-    /// Configures whether the logger generates colored output.
-    bool console_coloring : 1;
-
-    config();
+  private:
+    unsigned level_;
+    std::string_view component_;
+    detail::source_location loc_;
   };
 
-  /// Encapsulates a single logging event.
-  struct CAF_CORE_EXPORT event {
-    // -- constructors, destructors, and assignment operators ------------------
+  /// Helper class to print exit trace messages on scope exit.
+  class trace_exit_guard {
+  public:
+    trace_exit_guard() = default;
 
-    event() = default;
+    trace_exit_guard(logger* instance, log::event_ptr event)
+      : instance_(instance), event_(std::move(event)) {
+      // nop
+    }
 
-    event(event&&) = default;
+    trace_exit_guard(trace_exit_guard&& other) {
+      instance_ = other.instance_;
+      if (instance_) {
+        other.instance_ = nullptr;
+        event_ = other.event_;
+      }
+    }
 
-    event(const event&) = default;
+    trace_exit_guard& operator=(trace_exit_guard&& other) {
+      using std::swap;
+      swap(instance_, other.instance_);
+      swap(event_, other.event_);
+      return *this;
+    }
 
-    event& operator=(event&&) = default;
+    ~trace_exit_guard() {
+      if (instance_)
+        instance_->do_log(event_->with_message("EXIT"));
+    }
 
-    event& operator=(const event&) = default;
-
-    event(unsigned lvl, unsigned line, std::string_view cat,
-          std::string_view full_fun, std::string_view fun, std::string_view fn,
-          std::string msg, std::thread::id t, actor_id a, timestamp ts);
-
-    // -- member variables -----------------------------------------------------
-
-    /// Level/priority of the event.
-    unsigned level;
-
-    /// Current line in the file.
-    unsigned line_number;
-
-    /// Name of the category (component) logging the event.
-    std::string_view category_name;
-
-    /// Name of the current function as reported by `__PRETTY_FUNCTION__`.
-    std::string_view pretty_fun;
-
-    /// Name of the current function as reported by `__func__`.
-    std::string_view simple_fun;
-
-    /// Name of the current file.
-    std::string_view file_name;
-
-    /// User-provided message.
-    std::string message;
-
-    /// Thread ID of the caller.
-    std::thread::id tid;
-
-    /// Actor ID of the caller.
-    actor_id aid;
-
-    /// Timestamp of the event.
-    timestamp tstamp;
+  private:
+    logger* instance_ = nullptr;
+    log::event_ptr event_;
   };
-
-  enum field_type {
-    invalid_field,
-    category_field,
-    class_name_field,
-    date_field,
-    file_field,
-    line_field,
-    message_field,
-    method_field,
-    newline_field,
-    priority_field,
-    runtime_field,
-    thread_field,
-    actor_field,
-    percent_sign_field,
-    plain_text_field
-  };
-
-  /// Represents a single format string field.
-  struct field {
-    field_type kind;
-    std::string text;
-  };
-
-  /// Stores a parsed format string as list of fields.
-  using line_format = std::vector<field>;
 
   /// Utility class for building user-defined log messages with `CAF_ARG`.
   class CAF_CORE_EXPORT line_builder {
@@ -168,25 +117,27 @@ public:
     line_builder();
 
     template <class T>
-    detail::enable_if_t<!std::is_pointer<T>::value, line_builder&>
-    operator<<(const T& x) {
+    std::enable_if_t<!std::is_pointer_v<T>, line_builder&&>
+    operator<<(const T& x) && {
       if (!str_.empty())
         str_ += " ";
       str_ += deep_to_string(x);
-      return *this;
+      return std::move(*this);
     }
 
-    line_builder& operator<<(const local_actor* self);
+    line_builder&& operator<<(const local_actor* self) &&;
 
-    line_builder& operator<<(const std::string& str);
+    line_builder&& operator<<(const std::string& str) &&;
 
-    line_builder& operator<<(std::string_view str);
+    line_builder&& operator<<(std::string_view str) &&;
 
-    line_builder& operator<<(const char* str);
+    line_builder&& operator<<(const char* str) &&;
 
-    line_builder& operator<<(char x);
+    line_builder&& operator<<(char x) &&;
 
-    std::string get() const;
+    std::string get() && {
+      return std::move(str_);
+    }
 
   private:
     std::string str_;
@@ -194,13 +145,79 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  ~logger() override;
+  virtual ~logger() = default;
 
   // -- logging ----------------------------------------------------------------
 
-  /// Writes an entry to the event-queue of the logger.
-  /// @thread-safe
-  void log(event&& x);
+  /// Logs a message.
+  /// @param level Severity of the message.
+  /// @param component Name of the component logging the message.
+  /// @param fmt_str The format string (with source location) for the message.
+  /// @param args Arguments for the format string.
+  template <class... Ts>
+  static void log(unsigned level, std::string_view component,
+                  format_string_with_location fmt_str, Ts&&... args) {
+    auto* instance = current_logger();
+    if (instance && instance->accepts(level, component)) {
+      instance->do_log(log::event::make(level, component, fmt_str.location,
+                                        thread_local_aid(), fmt_str.value,
+                                        std::forward<Ts>(args)...));
+    }
+  }
+
+  /// Starts a new log event.
+  /// @param component Name of the component logging the message.
+  template <class... Ts>
+  static entrypoint
+  log(unsigned level, std::string_view component,
+      detail::source_location loc = detail::source_location::current()) {
+    return {level, component, loc};
+  }
+
+  /// Logs a message with `trace` severity.
+  /// @param component Name of the component logging the message.
+  /// @param fmt_str The format string (with source location) for the message.
+  /// @param args Arguments for the format string.
+  template <class... Ts>
+  [[nodiscard]] static trace_exit_guard
+  trace(std::string_view component, format_string_with_location fmt_str,
+        Ts&&... args) {
+    auto* instance = current_logger();
+    if (instance && instance->accepts(log::level::trace, component)) {
+      auto msg = std::string{"ENTRY"};
+      if (!fmt_str.value.empty()) {
+        msg += ' ';
+        msg += fmt_str.value;
+      }
+      auto event = log::event::make(log::level::trace, component,
+                                    fmt_str.location, thread_local_aid(), msg,
+                                    std::forward<Ts>(args)...);
+      auto event_cpy = event;
+      instance->do_log(std::move(event_cpy));
+      return {instance, event};
+    }
+    return {nullptr, {}};
+  }
+
+  // -- legacy API (for the logging macros) ------------------------------------
+
+  /// @private
+  void legacy_api_log(unsigned level, std::string_view component,
+                      std::string msg,
+                      detail::source_location loc
+                      = detail::source_location::current());
+
+  /// @private
+  [[nodiscard]] trace_exit_guard
+  legacy_api_log_trace(std::string_view component, std::string msg,
+                       detail::source_location loc
+                       = detail::source_location::current()) {
+    auto event = log::event::make(log::level::trace, component, loc,
+                                  thread_local_aid(), msg);
+    auto event_cpy = event;
+    do_log(std::move(event_cpy));
+    return {this, event};
+  }
 
   // -- properties -------------------------------------------------------------
 
@@ -208,147 +225,67 @@ public:
   static actor_id thread_local_aid();
 
   /// Associates an actor ID to the calling thread and returns the last value.
-  static actor_id thread_local_aid(actor_id aid);
+  static actor_id thread_local_aid(actor_id aid) noexcept;
 
   /// Returns whether the logger is configured to accept input for given
   /// component and log level.
-  bool accepts(unsigned level, std::string_view component_name);
-
-  /// Returns the output format used for the log file.
-  const line_format& file_format() const {
-    return file_format_;
-  }
-
-  /// Returns the output format used for the console.
-  const line_format& console_format() const {
-    return console_format_;
-  }
-
-  unsigned verbosity() const noexcept {
-    return cfg_.verbosity;
-  }
-
-  unsigned file_verbosity() const noexcept {
-    return cfg_.file_verbosity;
-  }
-
-  unsigned console_verbosity() const noexcept {
-    return cfg_.console_verbosity;
-  }
+  virtual bool accepts(unsigned level, std::string_view component_name) = 0;
 
   // -- static utility functions -----------------------------------------------
 
-  /// Renders the prefix (namespace and class) of a fully qualified function.
-  static void render_fun_prefix(std::ostream& out, const event& x);
-
-  /// Renders the name of a fully qualified function.
-  static void render_fun_name(std::ostream& out, const event& x);
-
-  /// Renders the date of `x` in ISO 8601 format.
-  static void render_date(std::ostream& out, timestamp x);
-
-  /// Parses `format_str` into a format description vector.
-  /// @warning The returned vector can have pointers into `format_str`.
-  static line_format parse_format(const std::string& format_str);
-
-  /// Skips path in `filename`.
-  static std::string_view skip_path(std::string_view filename);
-
-  // -- utility functions ------------------------------------------------------
-
-  /// Renders `x` using the line format `lf` to `out`.
-  void render(std::ostream& out, const line_format& lf, const event& x) const;
+  /// Creates a new logger instance.
+  static intrusive_ptr<logger> make(actor_system& sys);
 
   // -- thread-local properties ------------------------------------------------
 
-  /// Stores the actor system for the current thread.
-  static void set_current_actor_system(actor_system*);
+  static void set_current_actor_system();
 
   /// Returns the logger for the current thread or `nullptr` if none is
   /// registered.
   static logger* current_logger();
 
+  /// Sets the logger for the current thread.
+  static void current_logger(actor_system* sys);
+
+  /// Sets the logger for the current thread.
+  static void current_logger(logger* ptr);
+
+  /// Sets the logger for the current thread.
+  static void current_logger(std::nullptr_t);
+
+  // -- reference counting -----------------------------------------------------
+
+  /// Increases the reference count of the logger.
+  virtual void ref_logger() const noexcept = 0;
+
+  /// Decreases the reference count of the logger and destroys the object
+  /// if necessary.
+  virtual void deref_logger() const noexcept = 0;
+
+  friend void intrusive_ptr_add_ref(const logger* ptr) noexcept {
+    ptr->ref_logger();
+  }
+
+  friend void intrusive_ptr_release(const logger* ptr) noexcept {
+    ptr->deref_logger();
+  }
+
 private:
-  // -- constructors, destructors, and assignment operators --------------------
+  // -- internal logging API ---------------------------------------------------
 
-  logger(actor_system& sys);
+  virtual void do_log(log::event_ptr&& event) = 0;
 
-  // -- initialization ---------------------------------------------------------
+  // -- initialization (called by the actor_system) ----------------------------
 
-  void init(actor_system_config& cfg);
+  /// Allows the logger to read its configuration from the actor system config.
+  virtual void init(const actor_system_config& cfg) = 0;
 
-  bool open_file();
+  /// Starts any background threads needed by the logger.
+  virtual void start() = 0;
 
-  // -- event handling ---------------------------------------------------------
-
-  void handle_event(const event& x);
-
-  void handle_file_event(const event& x);
-
-  void handle_console_event(const event& x);
-
-  void log_first_line();
-
-  void log_last_line();
-
-  // -- thread management ------------------------------------------------------
-
-  void run();
-
-  void start();
-
-  void stop();
-
-  // -- member variables -------------------------------------------------------
-
-  // Configures verbosity and output generation.
-  config cfg_;
-
-  // Filters events by component name before enqueuing a log event. Intersection
-  // of file_filter_ and console_filter_ if both outputs are enabled.
-  std::vector<std::string> global_filter_;
-
-  // Filters events by component name for file output.
-  std::vector<std::string> file_filter_;
-
-  // Filters events by component name for console output.
-  std::vector<std::string> console_filter_;
-
-  // References the parent system.
-  actor_system& system_;
-
-  // Identifies the thread that called `logger::start`.
-  std::thread::id parent_thread_;
-
-  // Timestamp of the first log event.
-  timestamp t0_;
-
-  // Format for generating file output.
-  line_format file_format_;
-
-  // Format for generating console output.
-  line_format console_format_;
-
-  // Stream for file output.
-  std::fstream file_;
-
-  // Filled with log events by other threads.
-  detail::ringbuffer<event, queue_size> queue_;
-
-  // Stores the assembled name of the log file.
-  std::string file_name_;
-
-  // Executes `logger::run`.
-  std::thread thread_;
+  /// Stops all background threads of the logger.
+  virtual void stop() = 0;
 };
-
-CAF_CORE_EXPORT std::string to_string(logger::field_type x);
-
-/// @relates logger::field
-CAF_CORE_EXPORT std::string to_string(const logger::field& x);
-
-/// @relates logger::field
-CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
 
 } // namespace caf
 
@@ -377,13 +314,6 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
 /// Concatenates `a` and `b` to a single preprocessor token.
 #define CAF_CAT(a, b) a##b
 
-#define CAF_LOG_MAKE_EVENT(aid, component, loglvl, message)                    \
-  ::caf::logger::event(loglvl, __LINE__, component, CAF_PRETTY_FUN, __func__,  \
-                       caf::logger::skip_path(__FILE__),                       \
-                       (::caf::logger::line_builder{} << message).get(),       \
-                       ::std::this_thread::get_id(), aid,                      \
-                       ::caf::make_timestamp())
-
 /// Expands to `argument = <argument>` in log output.
 #define CAF_ARG(argument) caf::detail::make_arg_wrapper(#argument, argument)
 
@@ -398,19 +328,21 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
 
 #define CAF_LOG_IMPL(component, loglvl, message)                               \
   do {                                                                         \
-    auto CAF_PP_UNIFYN(caf_logger) = caf::logger::current_logger();            \
-    if (CAF_PP_UNIFYN(caf_logger) != nullptr                                   \
-        && CAF_PP_UNIFYN(caf_logger)->accepts(loglvl, component))              \
-      CAF_PP_UNIFYN(caf_logger)                                                \
-        ->log(CAF_LOG_MAKE_EVENT(caf::logger::thread_local_aid(), component,   \
-                                 loglvl, message));                            \
+    if (auto* caf_logger_instance = caf::logger::current_logger();             \
+        caf_logger_instance                                                    \
+        && caf_logger_instance->accepts(loglvl, component)) {                  \
+      caf_logger_instance->legacy_api_log(                                     \
+        loglvl, component, (caf::logger::line_builder{} << message).get());    \
+    }                                                                          \
   } while (false)
 
 #define CAF_PUSH_AID(aarg)                                                     \
   caf::actor_id CAF_PP_UNIFYN(caf_aid_tmp)                                     \
     = caf::logger::thread_local_aid(aarg);                                     \
-  auto CAF_PP_UNIFYN(caf_aid_tmp_guard) = caf::detail::make_scope_guard(       \
-    [=] { caf::logger::thread_local_aid(CAF_PP_UNIFYN(caf_aid_tmp)); })
+  auto CAF_PP_UNIFYN(caf_aid_tmp_guard)                                        \
+    = caf::detail::scope_guard([=]() noexcept {                                \
+        caf::logger::thread_local_aid(CAF_PP_UNIFYN(caf_aid_tmp));             \
+      })
 
 #define CAF_PUSH_AID_FROM_PTR(some_ptr)                                        \
   auto CAF_PP_UNIFYN(caf_aid_ptr) = some_ptr;                                  \
@@ -419,7 +351,7 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
 
 #define CAF_SET_AID(aid_arg) caf::logger::thread_local_aid(aid_arg)
 
-#define CAF_SET_LOGGER_SYS(ptr) caf::logger::set_current_actor_system(ptr)
+#define CAF_SET_LOGGER_SYS(ptr) caf::logger::current_logger(ptr)
 
 #if CAF_LOG_LEVEL < CAF_LOG_LEVEL_TRACE
 
@@ -428,11 +360,16 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
 #else // CAF_LOG_LEVEL < CAF_LOG_LEVEL_TRACE
 
 #  define CAF_LOG_TRACE(entry_message)                                         \
-    CAF_LOG_IMPL(CAF_LOG_COMPONENT, CAF_LOG_LEVEL_TRACE,                       \
-                 "ENTRY" << entry_message);                                    \
-    auto CAF_PP_UNIFYN(caf_log_trace_guard_)                                   \
-      = ::caf::detail::make_scope_guard(                                       \
-        [=] { CAF_LOG_IMPL(CAF_LOG_COMPONENT, CAF_LOG_LEVEL_TRACE, "EXIT"); })
+    caf::logger::trace_exit_guard caf_trace_log_auto_guard;                    \
+    if (auto* caf_logger_instance = caf::logger::current_logger();             \
+        caf_logger_instance                                                    \
+        && caf_logger_instance->accepts(CAF_LOG_LEVEL_TRACE,                   \
+                                        CAF_LOG_COMPONENT)) {                  \
+      caf_trace_log_auto_guard = caf_logger_instance->legacy_api_log_trace(    \
+        CAF_LOG_COMPONENT,                                                     \
+        (caf::logger::line_builder{} << "ENTRY" << entry_message).get());      \
+    }                                                                          \
+    static_cast<void>(0)
 
 #endif // CAF_LOG_LEVEL < CAF_LOG_LEVEL_TRACE
 
@@ -519,8 +456,6 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
                         ::caf::strong_actor_ptr{this->ctrl()})                 \
                         .c_str()                                               \
                    << "; FROM =" << ::caf::deep_to_string(ptr->sender).c_str() \
-                   << "; STAGES ="                                             \
-                   << ::caf::deep_to_string(ptr->stages).c_str()               \
                    << "; CONTENT ="                                            \
                    << ::caf::deep_to_string(ptr->content()).c_str())
 
@@ -528,8 +463,6 @@ CAF_CORE_EXPORT bool operator==(const logger::field& x, const logger::field& y);
     CAF_LOG_IMPL(CAF_LOG_FLOW_COMPONENT, CAF_LOG_LEVEL_DEBUG,                  \
                  "RECEIVE ; FROM ="                                            \
                    << ::caf::deep_to_string(ptr->sender).c_str()               \
-                   << "; STAGES ="                                             \
-                   << ::caf::deep_to_string(ptr->stages).c_str()               \
                    << "; CONTENT ="                                            \
                    << ::caf::deep_to_string(ptr->content()).c_str())
 

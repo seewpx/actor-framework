@@ -16,24 +16,23 @@ endfunction()
 
 # -- examples for CAF::core ----------------------------------------------------
 
-# introductionary applications
-add_core_example(. aout)
+# introductory applications
 add_core_example(. hello_world)
+add_core_example(. println)
 
 # configuration API
 add_core_example(config read-json)
 
 # basic message passing primitives
 add_core_example(message_passing calculator)
-add_core_example(message_passing cell)
 add_core_example(message_passing dancing_kirby)
 add_core_example(message_passing delegating)
 add_core_example(message_passing divider)
 add_core_example(message_passing fan_out_request)
-add_core_example(message_passing fixed_stack)
+add_core_example(message_passing idle_timeout_once)
+add_core_example(message_passing idle_timeout_repeat)
 add_core_example(message_passing promises)
 add_core_example(message_passing request)
-add_core_example(message_passing typed_calculator)
 
 # flow API
 add_core_example(flow iota)
@@ -66,6 +65,7 @@ if(TARGET CAF::io)
 
   # basic remoting
   add_io_example(remoting remote_spawn)
+  add_io_example(remoting stateful_remote_spawn)
   add_io_example(remoting distributed_calculator)
 
   if(CAF_ENABLE_CURL_EXAMPLES)
@@ -89,11 +89,14 @@ else()
   endfunction()
 endif()
 
+add_net_example(http client)
 add_net_example(http rest)
 add_net_example(http time-server)
 
 add_net_example(length_prefix_framing chat-client)
 add_net_example(length_prefix_framing chat-server)
+
+add_net_example(octet_stream key-value-store)
 
 add_net_example(web_socket echo)
 add_net_example(web_socket hello-client)

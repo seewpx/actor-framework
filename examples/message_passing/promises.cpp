@@ -1,9 +1,22 @@
-#include "caf/all.hpp"
+// This example illustrates how to use a response promise to delay responding to
+// an incoming message until a later point in time.
+
+#include "caf/actor_ostream.hpp"
+#include "caf/actor_system.hpp"
+#include "caf/caf_main.hpp"
+#include "caf/event_based_actor.hpp"
+#include "caf/response_promise.hpp"
+#include "caf/typed_event_based_actor.hpp"
 
 using namespace caf;
+using namespace std::literals;
 
 // --(rst-promise-begin)--
-using adder_actor = typed_actor<result<int32_t>(add_atom, int32_t, int32_t)>;
+struct adder_trait {
+  using signatures
+    = caf::type_list<result<int32_t>(add_atom, int32_t, int32_t)>;
+};
+using adder_actor = typed_actor<adder_trait>;
 
 adder_actor::behavior_type worker_impl() {
   return {
@@ -15,7 +28,8 @@ adder_actor::behavior_type server_impl(adder_actor::pointer self,
   return {
     [=](add_atom, int32_t y, int32_t z) {
       auto rp = self->make_response_promise<int32_t>();
-      self->request(worker, infinite, add_atom_v, y, z)
+      self->mail(add_atom_v, y, z)
+        .request(worker, infinite)
         .then([rp](int32_t result) mutable { rp.deliver(result); },
               [rp](error& err) mutable { rp.deliver(std::move(err)); });
       return rp;
@@ -25,9 +39,8 @@ adder_actor::behavior_type server_impl(adder_actor::pointer self,
 
 void client_impl(event_based_actor* self, adder_actor adder, int32_t x,
                  int32_t y) {
-  using namespace std::literals::chrono_literals;
-  self->request(adder, 10s, add_atom_v, x, y).then([=](int32_t result) {
-    aout(self) << x << " + " << y << " = " << result << std::endl;
+  self->mail(add_atom_v, x, y).request(adder, 10s).then([=](int32_t result) {
+    self->println("{} + {} = {}", x, y, result);
   });
 }
 

@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include "caf/detail/core_export.hpp"
+#include "caf/fwd.hpp"
+#include "caf/string_algorithms.hpp"
+
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
-
-#include "caf/detail/core_export.hpp"
-#include "caf/fwd.hpp"
-#include "caf/string_algorithms.hpp"
 
 namespace caf {
 
@@ -19,6 +19,21 @@ namespace caf {
 class CAF_CORE_EXPORT config_option {
 public:
   // -- member types -----------------------------------------------------------
+  /// An iterator over CLI arguments.
+  using argument_iterator = std::vector<std::string>::const_iterator;
+
+  /// Stores the result of a find operation. The option sets `begin == end`
+  /// if the operation could not find a match.
+  struct find_result {
+    /// The begin of the matched range.
+    argument_iterator begin;
+
+    /// The end of the matched range.
+    argument_iterator end;
+
+    /// The value for the config option.
+    std::string_view value;
+  };
 
   /// Custom vtable-like struct for delegating to type-specific functions and
   /// storing type-specific information shared by several config options.
@@ -55,18 +70,25 @@ public:
 
   // -- swap function ----------------------------------------------------------
 
-  friend void swap(config_option& first, config_option& second) noexcept;
+  void swap(config_option& other) noexcept;
 
   // -- properties -------------------------------------------------------------
 
   /// Returns the category of the option.
   std::string_view category() const noexcept;
 
-  /// Returns the name of the option.
+  /// Returns the full name of the option.
   std::string_view long_name() const noexcept;
 
   /// Returns (optional) one-letter short names of the option.
   std::string_view short_names() const noexcept;
+
+  /// Returns the environment variable name of the option.
+  std::string_view env_var_name() const noexcept;
+
+  /// Returns the environment variable name of the option as a null-terminated
+  /// C-string.
+  const char* env_var_name_cstr() const noexcept;
 
   /// Returns a human-readable description of the option.
   std::string_view description() const noexcept;
@@ -92,6 +114,10 @@ public:
   /// Returns whether the category is optional for CLI options.
   bool has_flat_cli_name() const noexcept;
 
+  /// Tries to find this option by its long name in `[first, last)`.
+  find_result find_by_long_name(argument_iterator first,
+                                argument_iterator last) const noexcept;
+
 private:
   std::string_view buf_slice(size_t from, size_t to) const noexcept;
 
@@ -99,42 +125,10 @@ private:
   uint16_t category_separator_;
   uint16_t long_name_separator_;
   uint16_t short_names_separator_;
-  uint16_t buf_size_;
+  uint16_t env_var_name_separator_;
+  size_t buf_size_;
   const meta_state* meta_;
   mutable void* value_;
 };
-
-/// Finds `config_option` string with a matching long name in (`first`, `last`],
-/// where each entry is a pointer to a string. Returns a `ForwardIterator` to
-/// the match and a `string_view` of the option value if the entry is
-/// found and a `ForwardIterator` to `last` with an empty `string_view`
-/// otherwise.
-template <class ForwardIterator, class Sentinel>
-std::pair<ForwardIterator, std::string_view>
-find_by_long_name(const config_option& x, ForwardIterator first,
-                  Sentinel last) {
-  auto long_name = x.long_name();
-  for (; first != last; ++first) {
-    std::string_view str{*first};
-    // Make sure this is a long option starting with "--".
-    if (!starts_with(str, "--"))
-      continue;
-    str.remove_prefix(2);
-    // Skip optional "caf#" prefix.
-    if (starts_with(str, "caf#"))
-      str.remove_prefix(4);
-    // Make sure we are dealing with the right key.
-    if (!starts_with(str, long_name))
-      continue;
-    // Make sure the key is followed by an assignment.
-    str.remove_prefix(long_name.size());
-    if (!starts_with(str, "="))
-      continue;
-    // Remove leading '=' and return the value.
-    str.remove_prefix(1);
-    return {first, str};
-  }
-  return {first, std::string_view{}};
-}
 
 } // namespace caf

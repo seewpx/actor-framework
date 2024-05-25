@@ -4,27 +4,26 @@
 
 #pragma once
 
-#include <chrono>
-#include <cstddef>
-#include <memory>
-#include <string_view>
-#include <tuple>
-#include <utility>
-
 #include "caf/allowed_unsafe_message_type.hpp"
 #include "caf/detail/as_mutable_ref.hpp"
 #include "caf/detail/parse.hpp"
 #include "caf/detail/print.hpp"
-#include "caf/detail/type_list.hpp"
 #include "caf/error.hpp"
 #include "caf/fwd.hpp"
 #include "caf/inspector_access_base.hpp"
 #include "caf/inspector_access_type.hpp"
 #include "caf/intrusive_cow_ptr.hpp"
 #include "caf/intrusive_ptr.hpp"
-#include "caf/optional.hpp"
 #include "caf/sec.hpp"
 #include "caf/span.hpp"
+#include "caf/type_list.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <memory>
+#include <string_view>
+#include <tuple>
+#include <utility>
 
 namespace caf::detail {
 
@@ -53,9 +52,9 @@ constexpr bool assertion_failed_v = false;
 template <class Inspector, class Set, class ValueType>
 auto bind_setter(Inspector& f, Set& set, ValueType& tmp) {
   using set_result_type = decltype(set(std::move(tmp)));
-  if constexpr (std::is_same<set_result_type, bool>::value) {
+  if constexpr (std::is_same_v<set_result_type, bool>) {
     return [&] { return set(std::move(tmp)); };
-  } else if constexpr (std::is_same<set_result_type, error>::value) {
+  } else if constexpr (std::is_same_v<set_result_type, error>) {
     return [&] {
       if (auto err = set(std::move(tmp)); !err) {
         return true;
@@ -65,7 +64,7 @@ auto bind_setter(Inspector& f, Set& set, ValueType& tmp) {
       }
     };
   } else {
-    static_assert(std::is_same<set_result_type, void>::value,
+    static_assert(std::is_same_v<set_result_type, void>,
                   "a setter must return caf::error, bool or void");
     return [&] {
       set(std::move(tmp));
@@ -126,13 +125,13 @@ bool load(Inspector& f, T& x, inspector_access_type::list) {
 }
 
 template <class Inspector, class T>
-std::enable_if_t<accepts_opaque_value<Inspector, T>::value, bool>
+std::enable_if_t<accepts_opaque_value_v<Inspector, T>, bool>
 load(Inspector& f, T& x, inspector_access_type::none) {
   return f.opaque_value(x);
 }
 
 template <class Inspector, class T>
-std::enable_if_t<!accepts_opaque_value<Inspector, T>::value, bool>
+std::enable_if_t<!accepts_opaque_value_v<Inspector, T>, bool>
 load(Inspector&, T&, inspector_access_type::none) {
   static_assert(
     detail::assertion_failed_v<T>,
@@ -219,13 +218,13 @@ bool save(Inspector& f, T& x, inspector_access_type::list) {
 }
 
 template <class Inspector, class T>
-std::enable_if_t<accepts_opaque_value<Inspector, T>::value, bool>
+std::enable_if_t<accepts_opaque_value_v<Inspector, T>, bool>
 save(Inspector& f, T& x, inspector_access_type::none) {
   return f.opaque_value(x);
 }
 
 template <class Inspector, class T>
-std::enable_if_t<!accepts_opaque_value<Inspector, T>::value, bool>
+std::enable_if_t<!accepts_opaque_value_v<Inspector, T>, bool>
 save(Inspector&, T&, inspector_access_type::none) {
   static_assert(
     detail::assertion_failed_v<T>,
@@ -240,7 +239,7 @@ bool save(Inspector& f, T& x) {
 
 template <class Inspector, class T>
 bool save(Inspector& f, const T& x) {
-  if constexpr (!std::is_function<T>::value) {
+  if constexpr (!std::is_function_v<T>) {
     return save(f, as_mutable_ref(x), inspect_access_type<Inspector, T>());
   } else {
     // Only inspector such as the stringification_inspector are going to accept
@@ -284,33 +283,17 @@ struct inspector_access;
 struct optional_inspector_traits_base {
   template <class T>
   static auto& deref_load(T& x) {
-    return *x;
+    return *x; // NOLINT(bugprone-unchecked-optional-access)
   }
 
   template <class T>
   static auto& deref_save(T& x) {
-    return *x;
+    return *x; // NOLINT(bugprone-unchecked-optional-access)
   }
 };
 
 template <class T>
 struct optional_inspector_traits;
-
-CAF_PUSH_DEPRECATED_WARNING
-
-template <class T>
-struct optional_inspector_traits<optional<T>> : optional_inspector_traits_base {
-  using container_type = optional<T>;
-
-  using value_type = T;
-
-  template <class... Ts>
-  static void emplace(container_type& container, Ts&&... xs) {
-    container.emplace(std::forward<Ts>(xs)...);
-  }
-};
-
-CAF_POP_WARNINGS
 
 template <class T>
 struct optional_inspector_traits<intrusive_ptr<T>>
@@ -396,7 +379,10 @@ struct optional_inspector_access {
   template <class Inspector, class IsPresent, class Get>
   static bool save_field(Inspector& f, std::string_view field_name,
                          IsPresent& is_present, Get& get) {
-    return detail::save_field(f, field_name, is_present, get);
+    auto deref_get = [&get]() -> decltype(auto) {
+      return traits::deref_save(get());
+    };
+    return detail::save_field(f, field_name, is_present, deref_get);
   }
 
   template <class Inspector, class IsValid, class SyncValue>
@@ -420,15 +406,6 @@ struct optional_inspector_access {
 };
 
 // -- inspection support for optional<T> ---------------------------------------
-
-CAF_PUSH_DEPRECATED_WARNING
-
-template <class T>
-struct inspector_access<optional<T>> : optional_inspector_access<optional<T>> {
-  // nop
-};
-
-CAF_POP_WARNINGS
 
 template <class T>
 struct optional_inspector_traits<std::optional<T>>
@@ -617,24 +594,23 @@ struct variant_inspector_traits<std::variant<Ts...>> {
   }
 
   template <class F>
-  static bool load(type_id_t, F&, detail::type_list<>) {
+  static bool load(type_id_t, F&, type_list<>) {
     return false;
   }
 
   template <class F, class U, class... Us>
-  static bool
-  load(type_id_t type, F& continuation, detail::type_list<U, Us...>) {
+  static bool load(type_id_t type, F& continuation, type_list<U, Us...>) {
     if (type_id_v<U> == type) {
       auto tmp = U{};
       continuation(tmp);
       return true;
     }
-    return load(type, continuation, detail::type_list<Us...>{});
+    return load(type, continuation, type_list<Us...>{});
   }
 
   template <class F>
   static bool load(type_id_t type, F continuation) {
-    return load(type, continuation, detail::type_list<Ts...>{});
+    return load(type, continuation, type_list<Ts...>{});
   }
 };
 

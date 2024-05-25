@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "caf/detail/assert.hpp"
 #include "caf/flow/observer.hpp"
 #include "caf/flow/op/hot.hpp"
 #include "caf/flow/subscription.hpp"
@@ -46,12 +47,12 @@ using cell_listener_ptr = intrusive_ptr<cell_listener<T>>;
 /// State shared between one multicast operator and one subscribed observer.
 template <class T>
 struct cell_sub_state {
-  std::variant<none_t, unit_t, T, error> content;
+  std::variant<none_t, std::nullptr_t, T, error> content;
   std::vector<cell_listener_ptr<T>> listeners;
 
   void set_null() {
     CAF_ASSERT(std::holds_alternative<none_t>(content));
-    content = unit;
+    content = nullptr;
     std::vector<cell_listener_ptr<T>> xs;
     xs.swap(listeners);
     for (auto& listener : xs) {
@@ -115,8 +116,8 @@ class cell_sub : public subscription::impl_base, public cell_listener<T> {
 public:
   // -- constructors, destructors, and assignment operators --------------------
 
-  cell_sub(coordinator* ctx, cell_sub_state_ptr<T> state, observer<T> out)
-    : ctx_(ctx), state_(std::move(state)), out_(std::move(out)) {
+  cell_sub(coordinator* parent, cell_sub_state_ptr<T> state, observer<T> out)
+    : parent_(parent), state_(std::move(state)), out_(std::move(out)) {
     // nop
   }
 
@@ -132,26 +133,19 @@ public:
 
   // -- implementation of subscription -----------------------------------------
 
-  bool disposed() const noexcept override {
-    return !state_;
+  coordinator* parent() const noexcept override {
+    return parent_;
   }
 
-  void dispose() override {
-    if (state_) {
-      state_->drop(this);
-      state_ = nullptr;
-    }
-    if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_complete();
-    }
+  bool disposed() const noexcept override {
+    return !state_;
   }
 
   void request(size_t) override {
     if (!listening_) {
       listening_ = true;
       auto self = cell_listener_ptr<T>{this};
-      ctx_->delay_fn([state = state_, self]() mutable { //
+      parent_->delay_fn([state = state_, self]() mutable { //
         state->listen(std::move(self));
       });
     }
@@ -166,18 +160,14 @@ public:
 
   void on_complete() override {
     state_ = nullptr;
-    if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_complete();
-    }
+    if (out_)
+      out_.on_complete();
   }
 
   void on_error(const error& what) override {
     state_ = nullptr;
-    if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_error(what);
-    }
+    if (out_)
+      out_.on_error(what);
   }
 
   void ref_listener() const noexcept override {
@@ -189,7 +179,20 @@ public:
   }
 
 private:
-  coordinator* ctx_;
+  void do_dispose(bool from_external) override {
+    if (state_) {
+      state_->drop(this);
+      state_ = nullptr;
+    }
+    if (out_) {
+      if (from_external)
+        out_.on_error(make_error(sec::disposed));
+      else
+        out_.release_later();
+    }
+  }
+
+  coordinator* parent_;
   bool listening_ = false;
   cell_sub_state_ptr<T> state_;
   observer<T> out_;
@@ -211,8 +214,8 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit cell(coordinator* ctx)
-    : super(ctx), state_(std::make_shared<state_type>()) {
+  explicit cell(coordinator* parent)
+    : super(parent), state_(std::make_shared<state_type>()) {
     // nop
   }
 
@@ -229,7 +232,8 @@ public:
   }
 
   disposable subscribe(observer<T> out) override {
-    auto ptr = make_counted<cell_sub<T>>(super::ctx_, state_, out);
+    auto ptr = super::parent_->add_child(std::in_place_type<cell_sub<T>>,
+                                         state_, out);
     out.on_subscribe(subscription{ptr});
     return disposable{std::move(ptr)};
   }

@@ -18,10 +18,10 @@ class producer;
 // -- template classes ---------------------------------------------------------
 
 template <class T>
-class spsc_buffer;
+class consumer_resource;
 
 template <class T>
-class consumer_resource;
+class future;
 
 template <class T>
 class producer_resource;
@@ -30,15 +30,16 @@ template <class T>
 class promise;
 
 template <class T>
-class future;
+class publisher;
+
+template <class T>
+class spsc_buffer;
+
+template <class T>
+class blocking_producer;
 
 // -- smart pointer aliases ----------------------------------------------------
 
 using execution_context_ptr = intrusive_ptr<execution_context>;
-
-// -- free function templates --------------------------------------------------
-
-template <class T>
-batch make_batch(span<const T> items);
 
 } // namespace caf::async

@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include "caf/detail/net_export.hpp"
-#include "caf/fwd.hpp"
 #include "caf/net/fwd.hpp"
 #include "caf/net/generic_upper_layer.hpp"
+
+#include "caf/detail/net_export.hpp"
+#include "caf/fwd.hpp"
 
 namespace caf::net::octet_stream {
 
@@ -29,6 +30,9 @@ public:
   ///          input or negative to signal an error.
   [[nodiscard]] virtual ptrdiff_t consume(byte_span buffer, byte_span delta)
     = 0;
+
+  /// Called from the lower layer whenever data has been written.
+  virtual void written(size_t num_bytes);
 };
 
 } // namespace caf::net::octet_stream

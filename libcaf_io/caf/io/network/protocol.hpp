@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include "caf/detail/io_export.hpp"
+
 #include <cstddef>
 #include <string>
-
-#include "caf/detail/io_export.hpp"
 
 namespace caf::io::network {
 
@@ -20,6 +20,14 @@ struct protocol {
   transport trans;
   network net;
 };
+
+constexpr bool operator==(const protocol& lhs, const protocol& rhs) noexcept {
+  return lhs.trans == rhs.trans && lhs.net == rhs.net;
+}
+
+constexpr bool operator!=(const protocol& lhs, const protocol& rhs) noexcept {
+  return !(lhs == rhs);
+}
 
 inline std::string to_string(protocol::transport x) {
   return x == protocol::tcp ? "TCP" : "UDP";

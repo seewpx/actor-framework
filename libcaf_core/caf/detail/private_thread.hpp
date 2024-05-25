@@ -4,17 +4,18 @@
 
 #pragma once
 
+#include "caf/detail/core_export.hpp"
+#include "caf/detail/private_thread_pool.hpp"
+#include "caf/fwd.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
 
-#include "caf/detail/private_thread_pool.hpp"
-#include "caf/fwd.hpp"
-
 namespace caf::detail {
 
-class private_thread : public private_thread_pool::node {
+class CAF_CORE_EXPORT private_thread : public private_thread_pool::node {
 public:
   void resume(resumable* ptr);
 

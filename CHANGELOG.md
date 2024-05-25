@@ -5,6 +5,350 @@ is based on [Keep a Changelog](https://keepachangelog.com).
 
 ## [Unreleased]
 
+### Added
+
+- The actor system now offers a `println` convenience function for printing to
+  the console. When building CAF with C++20 enabled, the function uses
+  `std::format` internally. Otherwise, it falls back to the compatibility layer
+  with the same syntax. The function also recognizes `inspect` overloads for
+  custom types. Any printing done by this function is thread-safe. The function
+  is available on actors in order to allow `self->println("...")`.
+- Actors have a new `monitor` member function that takes an actor handle and a
+  callback. The callback will run when the monitored actor terminates (in the
+  context of the monitoring actor). The function returns a `monitorable` object
+  that can be used to cancel the monitoring. This mechanism replaces the old
+  approach that relied on `down_msg` handlers in event-based actors (nothing
+  changes for blocking actors).
+- Event-based actors can now set an idle timeout via `set_idle_handler`. The
+  timeout fires when the actor receives no messages for a specified duration.
+  This new feature replaces the `after(...) >> ...` syntax and allows actors to
+  specify what kind of reference CAF will hold to that actor while it is waiting
+  for the timeout (strong or weak) and whether to trigger the timeout once or
+  repeatedly.
+
+
+### Fixed
+
+- Fix building CAF with shared libraries (DLLs) enabled on Windows (#1715).
+- The `actor_from_state` utility now evaluates spawn options such as `linked`
+  (#1771). Previously, passing this option to `actor_from_state` resulted in a
+  compiler error.
+- Sending a message to an already terminated actor from a `function_view` now
+  properly reports an error (#1801).
+- URIs now support support username and password in the user-info sub-component
+  (#1814). Consequently, the `userinfo` field of the URI class now has two
+  member variables: `name` and (an optional) `password`. Further, the `userinfo`
+  field is now optional in order to differentiate between an empty user-info and
+  no user-info at all.
+- The parser for reading JSON and configuration files now properly handles
+  Windows-style line endings (#1850).
+- Calling `force_utc` on a `caf::chrono::dateime` object now properly applies
+  the UTC offset. Previously, the function would shift the time into the wrong
+  direction (#1860).
+- Fix a regression in the work-stealing scheduler that prevented workers from
+  stealing work from other workers in the relaxed polling state (#1866).
+- Fix a bug in the `json_builder` when using integers or boolean values as keys
+  in a JSON object.
+
+### Removed
+
+- The obsolete CAF types `caf::string_view`, `caf::byte`, `caf::optional`,
+  `caf::replies_to`, and `caf::flow::item_publisher`.
+- The obsolete `operator*` for "combining" two actor handles.
+- All `to_stream` and `to_typed_stream` member functions on actors (they are
+  available on `caf::flow::observable` directly).
+- The `group` API has been removed entirely.
+- The experimental APIs for actor profiling and inserting tracing data have been
+  removed. Neither API has a clear use case at the moment and since we have not
+  received any feedback on either API, we have decided to remove them to
+  simplify the code base.
+- The `actor_system_config` no longer contains special member variables for the
+  OpenSSL module. The module now uses the regular configuration system.
+- The `caf-run` tool no longer ships with CAF. The tool has not been maintained
+  for a long time, has never been thoroughly tested, and has no documentation.
+- The `actor_system_config` no longer contains the `logger_factory` setter. We
+  might reintroduce this feature in the future, but we think the new `logger`
+  interface class is not yet stable enough to expose it to users and to allow
+  custom logger implementations.
+
+
+### Changed
+
+- When using the caf-net module, users may enable Prometheus metric export by
+  setting the configuration option `caf.net.prometheus-http`. The option has the
+  following fields: `port`, `address`, `tls.key-file`, and `tls.cert-file`. When
+  setting the TLS options, the server will use HTTPS instead of HTTP.
+- Sending messages from cleanup code (e.g., the destructor of a state class) is
+  now safe. Previously, doing so could cause undefined behavior by forming a
+  strong reference to a destroyed actor.
+- Actors will now always send an error message if an incoming message triggered
+  an unhandled exception. Previously, CAF would only send an error message if
+  the incoming message was a request (#1684).
+- Stateful actors now provide a getter function `state()` instead of declaring a
+  public `state` member variable. This change enables more flexibility in the
+  implementation for future CAF versions.
+- Passing a class to `spawn_inactive` is now optional and defaults to
+  `event_based_actor`. The next major release will remove the class parameter
+  altogether.
+
+### Deprecated
+
+- Using `spawn_inactive` now emits a deprecation warning when passing a class
+  other than `event_based_actor`.
+- The experimental `actor_pool` API has been deprecated. The API has not seen
+  much use and is too cumbersome.
+- The printing interface via `aout` has been replaced by the new `println`
+  function. The old interface is now deprecated and will be removed in the next
+  major release.
+- Calling `monitor` with a single argument is now deprecated for event-based
+  actors. Users should always provide a callback as the second argument. Note
+  that nothing changes for blocking actors. They still call `monitor` and then
+  receive a `down_msg` in their mailbox.
+- The function `set_down_handler` is deprecated for the same reasons as
+  `monitor`: please use the new `monitor` API with a callback instead.
+- The spawn flag `monitored` is deprecated as well and users should call
+  `monitor` directly instead.
+- Constructing a behavior with `after(...) >> ...` has been deprecated in favor
+  of the new `set_idle_handler` function. Note that blocking actors may still
+  pass a timeout via `after(...)` to `receive` functions. The deprecation only
+  targets event-based actors.
+
+## [0.19.5] - 2024-01-08
+
+### Added
+
+- An `observable` that runs on an actor can now be converted to a `stream` or
+  `typed_stream` directly by calling `to_stream` or `to_typed_stream` on it.
+- New `caf::async` API to read text and binary files asynchronously in a
+  separate thread. The contents of the files are consumed as flows (#1573).
+- The class `caf::unordered_flat_map` now has the `contains` and
+  `insert_or_assign` member functions.
+- CAF now supports setting custom configuration options via environment
+  variables. The new priority order is: CLI arguments, environment variables,
+  configuration files, and default values. The environment variable name is
+  the full name of the option in uppercase, with all non-alphanumeric
+  characters replaced by underscores. For example, the environment variable
+  `FOO_BAR` sets the option `foo.bar`. Users may also override the default
+  name by putting the environment name after the short names, separated by a
+  comma. For example, `opt_group{custom_options_, "foo"}.add("bar,b,MY_BAR")`
+  overrides the default environment variable name `FOO_BAR` with `MY_BAR`.
+- The formatting functions from `caf/chrono.hpp` now support precision for the
+  fractional part of the seconds and an option to print with a fixed number of
+  digits.
+- The new class `caf::chunk` represents an immutable sequence of bytes with a
+  fixed size. Unlike `std::span`, a `chunk` owns its data and can be (cheaply)
+  copied and moved.
+- Users can now convert state classes with a `make_behavior` member function
+  into a "function-based actor" via the new `actor_from_state` utility. For
+  example, `sys.spawn(caf::actor_from_state<my_state>, args...)` creates a new
+  actor that initializes its state with `my_state{args...}` and then calls
+  `make_behavior()` on the state object to obtain the initial behavior.
+- The `aout` utility received a `println` member function that adds a formatted
+  line to the output stream. The function uses the same formatting backend as
+  the logging API.
+
+### Fixed
+
+- The class `caf::test::outline` is now properly exported from the test module.
+  This fixes builds with dynamic linking against `libcaf_test`.
+- Fix a crash with the new deterministic test fixture when cleaning up actors
+  with stashed messages (#1589).
+- When using `request(...).await(...)`, the actor no longer suspends handling of
+  system messages while waiting for the response (#1584).
+- Fix compiler errors and warnings for GCC 13 in C++23 mode (#1583).
+- Fix encoding of chunk size in chunked HTTP responses (#1587).
+- Fix leak when using `spawn_inactive` and not launching the actor explicitly
+  (#1597).
+- Fix a minor bug in the deserialization of messages that caused CAF to allocate
+  more storage than necessary (#1614).
+- Add missing `const` to `publisher<T>::observe_on`.
+- All `observable` implementations now properly call `on_subscribe` on their
+  subscriber before calling `on_error`.
+- The function `config_value::parse` now properly handles leading and trailing
+  whitespaces.
+- Comparing two  `caf::unordered_flat_map` previously relied on the order of
+  elements in the map and thus could result in false negatives. The new
+  implementation is correct and no longer relies on the order of elements.
+- When using `--dump-config`, CAF now properly renders nested dictionaries.
+  Previously, dictionaries in lists missed surrounding braces.
+- CAF now parses `foo.bar = 42` in a config file as `foo { bar = 42 }`, just as
+  it does for CLI arguments.
+- Fix shutdown logic for actors with open streams. This resolves an issue where
+  actors would not terminate correctly after receiving an exit message (#1657).
+- Fix compilation error on MSVC when building `caf_test` with shared libraries
+  enabled (#1669).
+- Calling `delay_for_fn` on a flow coordinator now returns a `disposable` in
+  order to be consistent with `delay_for` and `delay_until`.
+- Calling `dispose` on a server (e.g. an HTTP server) now properly closes all
+  open connections.
+- Fix static assert in `expected` when calling `transform` on an rvalue with a
+  function object that only accepts an rvalue.
+- The function `caf::net::make_pipe` no longer closes read/write channels of the
+  connected socket pair on Windows. This fixes a bug where the pipe would close
+  after two minutes of inactivity.
+
+### Changed
+
+- Calling `to_string` on any of CAF's enum types now represents the enum value
+  using the short name instead of the fully qualified name. For example,
+  `to_string(sec::none)` now returns `"none"` instead of `"caf::sec::none"`.
+  Accordingly, `from_string` now accepts the short name (in additional to the
+  fully qualified name).
+- Log format strings no longer support `%C`. CAF still recognizes this option
+  but it will always print `null`.
+- The function `caf::telemetry::counter::inc` now allows passing 0 as an
+  argument. Previously, passing 0 triggered an assertion when building CAF with
+  runtime checks enabled.
+- Calling `dispose` on a flow subscription now calls `on_error(sec::disposed)`
+  on the observer. Previously, CAF would simply call `on_complete()` on the
+  observer, making it impossible to distinguish between a normal completion and
+  disposal.
+- The `caf::logger` received a complete overhaul and became an interface class.
+  By turning the class into an interface, users can now install custom logger
+  implementations. CAF uses the previous implementation as the default logger if
+  no custom logger is configured. To install a logger, users can call
+  `cfg.logger_factory(my_logger_factory)` on the `actor_system_config` before
+  constructing the `actor_system`. The logger factory is a function object with
+  signature `caf::intrusive_ptr<caf::logger>(caf::actor_system&)`. Furthermore,
+  log messages are now formatted using `std::format` when compiling CAF with
+  C++20 or later. Otherwise, CAF will fall back to a minimal formatting
+  implementation with compatible syntax. The logging API will also automatically
+  convert any type with a suitable `inspect` overload to a string if the type is
+  not recognized by `format`.
+
+### Deprecated
+
+- Calling `to_stream` or `to_typed_stream` on an actor is now deprecated. Simply
+  call `to_stream` or `to_typed_stream` directly on the `observable` instead.
+
+### Removed
+
+- The implementation of `operator<` for `caf::unordered_flat_map` was broken and
+  relied on the order of elements in the map. We have removed it, since it has
+  never worked correctly and a correct implementation would be too expensive.
+
+## [0.19.4] - 2023-09-29
+
+### Fixed
+
+- Stream batches are now properly serialized and deserialized when subscribing
+  to a stream from a remote node (#1566).
+
+## [0.19.3] - 2023-09-20
+
+### Added
+
+- The class `caf::telemetry::label` now has a new `compare` overload that
+  accepts a `caf::telemetry::label_view` to make the interface of the both
+  classes symmetrical.
+- The template class `caf::dictionary` now has new member functions for erasing
+  elements.
+- The CLI argument parser now supports a space separator when using long
+  argument names, e.g., `--foo bar`. This is in addition to the existing
+  `--foo=bar` syntax.
+- The functions `make_message` and `make_error` now support `std::string_view`
+  as input and automatically convert it to `std::string`.
+- To make it easier to set up asynchronous flows, CAF now provides a new class:
+  `caf::async::publisher`. Any observable can be transformed into a publisher by
+  calling `to_publisher`. The publisher can then be used to subscribe to the
+  observable from other actors or threads. The publisher has only a single
+  member function: `observe_on`. It converts the publisher back into an
+  observable. This new abstraction allows users to set up asynchronous flows
+  without having to manually deal with SPSC buffers.
+- The flow API received additional operators: `first`, `last`, `take_last`,
+  `skip_last`, `element_at`, and `ignore_elements`.
+
+### Changed
+
+- When using CAF to parse CLI arguments, the output of `--help` now includes all
+  user-defined options. Previously, only options in the global category or
+  options with a short name were included. Only CAF options are now excluded
+  from the output. They will still be included in the output of `--long-help`.
+- The output of `--dump-config` now only contains CAF options from loaded
+  modules. Previously, it also included options from modules that were not
+  loaded.
+- We renamed `caf::flow::item_publisher` to `caf::flow::multicaster` to better
+  reflect its purpose and to avoid confusion with the new
+  `caf::async::publisher`.
+- When failing to deserialize a request, the sender will receive an error of
+  kind `sec::malformed_message`.
+- When implementing custom protocol layers that sit on top of an octet stream,
+  the `delta` byte span passed to `consume` now resets whenever returning a
+  positive value from `consume`.
+- When constructing a `behavior` or `message_handler`, callbacks that take a
+  `message` argument are now treated as catch-all handlers.
+- When creating a message with a non-existing type ID, CAF now prints a
+  human-readable error message and calls `abort` instead of crashing the
+  application.
+
+### Fixed
+
+- Fix build errors with exceptions disabled.
+- Fix a regression in `--dump-config` that caused CAF applications to emit
+  malformed output.
+- Fix handling of WebSocket frames that are exactly on the 65535 byte limit.
+- Fix crash when using a fallback value for optional values (#1427).
+- Using `take(0)` on an observable now properly creates an observable that calls
+  `on_complete` on its subscriber on the first activity of the source
+  observable. Previously, the created observable would never reach its threshold
+  and attempt to buffer all values indefinitely.
+- The comparison operator of `intrusive_ptr` no longer accidentally creates new
+  `intrusive_ptr` instances when comparing to raw pointers.
+- Fix function object lifetimes in actions. This bug caused CAF to hold onto a
+  strong reference to actors that canceled a timeout until the timeout expired.
+  This could lead to actors being kept alive longer than necessary (#698).
+- Key lookups in `caf::net::http::request_header` are now case-insensitive, as
+  required by the HTTP specification. Further, `field_at` is now a `const`
+  member function (#1554).
+
+## [0.19.2] - 2023-06-13
+
+### Changed
+
+- Install CAF tools to `${CMAKE_INSTALL_BINDIR}` to make packaging easier.
+- The OpenSSL module no longer hard-codes calls to `SSL_CTX_set_cipher_list` in
+  order to use the system settings by default. Users can provide a custom cipher
+  list by providing a value for the configuration option
+  `caf.openssl.cipher-list`. To restore the previous behavior, set this
+  parameter to `HIGH:!aNULL:!MD5` when running with a certificate and
+  `AECDH-AES256-SHA@SECLEVEL=0` otherwise (or without `@SECLEVEL=0` for older
+  versions of OpenSSL). Please note that these lists are *not* recommended as
+  safe defaults, which is why we are no longer setting these values.
+
+### Fixed
+
+- Add missing initialization code for the new caf-net module when using the
+  `CAF_MAIN` macro. This fixes the `WSANOTINITIALISED` error on Windows (#1409).
+- The WebSocket implementation now properly re-assembles fragmented frames.
+  Previously, a bug in the framing protocol implementation caused CAF to sever
+  the connection when encountering continuation frames (#1417).
+
+### Added
+
+- Add new utilities in `caf::chrono` for making it easier to handle ISO 8601
+  timestamps. The new function `std::chrono::to_string` converts system time to
+  an ISO timestamp. For reading an ISO timestamp, CAF now provides the class
+  `caf::chrono::datetime`. It can parse ISO-formatted strings via `parse` (or
+  `datetime::from_string`) and convert them to a local representation via
+  `to_local_time`. Please refer to the class documentation for more details.
+
+## [0.19.1] - 2023-05-01
+
+### Added
+
+- The class `json_value` can now hold unsigned 64-bit integer values. This
+  allows it to store values that would otherwise overflow a signed integer.
+  Values that can be represented in both integer types will return `true` for
+  `is_integer()` as well as for the new `is_unsigned()` function. Users can
+  obtain the stored value as `uint64_t` via `to_unsigned()`.
+
+### Changed
+
+- With the addition of the unsigned type to `json_value`, there is now a new
+  edge case where `is_number()` returns `true` but neither `is_integer()` nor
+  `is_double()` return `true`: integer values larger than `INT64_MAX` will only
+  return true for `is_unsigned()`.
+
 ### Fixed
 
 - Fix flow setup for servers that use `web_socket::with`. This bug caused
@@ -597,9 +941,9 @@ is based on [Keep a Changelog](https://keepachangelog.com).
   already did.
 - The `typed_actor_view` decorator lacked several member functions such as
   `link_to`, `send_exit`, etc. These are now available.
-- Constructing a `typed_actor` handle from a pointer view failed du to a missing
-  constructor overload. This (explicit) overload now exists and the conversion
-  should work as expected.
+- Constructing a `typed_actor` handle from a pointer view failed due to a
+  missing constructor overload. This (explicit) overload now exists and the
+  conversion should work as expected.
 - Sending floating points to remote actors changed `infinity` and `NaN` to
   garbage values (#1107). The fixed packing / unpacking routines for IEEE 754
   values keep these non-numeric values intact now. It is worth mentioning that
@@ -951,7 +1295,12 @@ is based on [Keep a Changelog](https://keepachangelog.com).
 - Setting the log level to `quiet` now properly suppresses any log output.
 - Configuring colored terminal output should now print colored output.
 
-[Unreleased]: https://github.com/actor-framework/actor-framework/compare/0.19.0...master
+[Unreleased]: https://github.com/actor-framework/actor-framework/compare/0.19.5...master
+[0.19.5]: https://github.com/actor-framework/actor-framework/releases/0.19.5
+[0.19.4]: https://github.com/actor-framework/actor-framework/releases/0.19.4
+[0.19.3]: https://github.com/actor-framework/actor-framework/releases/0.19.3
+[0.19.2]: https://github.com/actor-framework/actor-framework/releases/0.19.2
+[0.19.1]: https://github.com/actor-framework/actor-framework/releases/0.19.1
 [0.19.0]: https://github.com/actor-framework/actor-framework/releases/0.19.0
 [0.19.0-rc.1]: https://github.com/actor-framework/actor-framework/releases/0.19.0-rc.1
 [0.18.7]: https://github.com/actor-framework/actor-framework/releases/0.18.7

@@ -1,10 +1,10 @@
 // Showcases custom message types that cannot provide
 // friend access to the inspect() function.
 
+#include "caf/all.hpp"
+
 #include <iostream>
 #include <utility>
-
-#include "caf/all.hpp"
 
 class foo;
 
@@ -74,12 +74,12 @@ bool inspect(Inspector& f, foo& x) {
 
 behavior testee(event_based_actor* self) {
   return {
-    [=](const foo& x) { aout(self) << deep_to_string(x) << endl; },
+    [self](const foo& x) { self->println("{}", x); },
   };
 }
 
 void caf_main(actor_system& system) {
-  anon_send(system.spawn(testee), foo{1, 2});
+  anon_mail(foo{1, 2}).send(system.spawn(testee));
 }
 
 CAF_MAIN(id_block::custom_types_3)

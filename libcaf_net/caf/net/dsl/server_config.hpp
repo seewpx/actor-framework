@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include "caf/callback.hpp"
-#include "caf/defaults.hpp"
-#include "caf/intrusive_ptr.hpp"
 #include "caf/net/dsl/base.hpp"
 #include "caf/net/dsl/config_base.hpp"
 #include "caf/net/fwd.hpp"
 #include "caf/net/ssl/context.hpp"
 #include "caf/net/tcp_accept_socket.hpp"
+
+#include "caf/callback.hpp"
+#include "caf/defaults.hpp"
+#include "caf/intrusive_ptr.hpp"
 
 #include <cassert>
 #include <cstdint>
@@ -29,7 +30,7 @@ struct server_config_tag {
 class server_config {
 public:
   /// Configuration for a server that creates the socket on demand.
-  class lazy : public has_ctx {
+  class lazy : public has_make_ctx {
   public:
     static constexpr std::string_view name = "lazy";
 
@@ -53,7 +54,7 @@ public:
   static constexpr auto lazy_v = lazy_t{};
 
   /// Configuration for a server that uses a user-provided socket.
-  class socket : public has_ctx {
+  class socket : public has_make_ctx {
   public:
     static constexpr std::string_view name = "socket";
 
@@ -99,6 +100,23 @@ public:
 
     /// Configures how many concurrent connections the server allows.
     size_t max_connections = defaults::net::max_connections.fallback;
+
+    template <class Fn>
+    auto with_ssl_acceptor_or_socket(Fn&& fn) {
+      return [this, fn = std::forward<Fn>(fn)](auto&& fd) mutable {
+        using fd_t = decltype(fd);
+        using res_t = decltype(fn(std::forward<fd_t>(fd)));
+        if (auto* sub = this->as_has_make_ctx(); sub && sub->make_ctx) {
+          auto maybe_ctx = sub->make_ctx();
+          if (!maybe_ctx)
+            return res_t{maybe_ctx.error()};
+          auto& ctx = *maybe_ctx;
+          auto acc = ssl::tcp_acceptor{std::forward<fd_t>(fd), std::move(*ctx)};
+          return fn(std::move(acc));
+        }
+        return fn(std::forward<fd_t>(fd));
+      };
+    }
   };
 };
 

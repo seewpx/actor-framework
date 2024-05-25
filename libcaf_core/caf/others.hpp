@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include <functional>
-#include <type_traits>
-
 #include "caf/catch_all.hpp"
 
 namespace caf {
@@ -17,8 +14,8 @@ struct others_t {
   }
 
   template <class F>
-  catch_all<F> operator>>(F fun) const {
-    return {fun};
+  [[deprecated]] auto operator>>(F fun) const {
+    return catch_all<F>{fun};
   }
 };
 

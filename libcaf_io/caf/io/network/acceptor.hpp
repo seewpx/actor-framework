@@ -4,13 +4,14 @@
 
 #pragma once
 
-#include "caf/detail/io_export.hpp"
 #include "caf/io/fwd.hpp"
 #include "caf/io/network/acceptor_manager.hpp"
 #include "caf/io/network/event_handler.hpp"
 #include "caf/io/network/native_socket.hpp"
 #include "caf/io/network/operation.hpp"
-#include "caf/logger.hpp"
+
+#include "caf/detail/io_export.hpp"
+#include "caf/log/io.hpp"
 #include "caf/ref_counted.hpp"
 
 namespace caf::io::network {
@@ -47,7 +48,7 @@ public:
 protected:
   template <class Policy>
   void handle_event_impl(io::network::operation op, Policy& policy) {
-    CAF_LOG_TRACE(CAF_ARG(fd()) << CAF_ARG(op));
+    auto lg = log::io::trace("fd = {}, op = {}", fd(), op);
     if (mgr_ && op == operation::read) {
       native_socket sockfd = invalid_native_socket;
       if (policy.try_accept(sockfd, fd())) {

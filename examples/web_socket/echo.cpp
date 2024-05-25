@@ -1,15 +1,20 @@
 // Simple WebSocket server that sends everything it receives back to the sender.
 
+#include "caf/net/middleman.hpp"
+#include "caf/net/web_socket/frame.hpp"
+#include "caf/net/web_socket/with.hpp"
+
 #include "caf/actor_system.hpp"
 #include "caf/actor_system_config.hpp"
 #include "caf/caf_main.hpp"
 #include "caf/event_based_actor.hpp"
-#include "caf/net/middleman.hpp"
-#include "caf/net/web_socket/with.hpp"
 #include "caf/scheduled_actor/flow.hpp"
 
-#include <iostream>
+#include <atomic>
+#include <csignal>
 #include <utility>
+
+using namespace std::literals;
 
 // -- constants ----------------------------------------------------------------
 
@@ -28,15 +33,35 @@ struct config : caf::actor_system_config {
       .add<std::string>("key-file,k", "path to the private key file")
       .add<std::string>("cert-file,c", "path to the certificate file");
   }
+
+  caf::settings dump_content() const override {
+    auto result = actor_system_config::dump_content();
+    caf::put_missing(result, "port", default_port);
+    caf::put_missing(result, "max-connections", default_max_connections);
+    return result;
+  }
 };
 
 // -- main ---------------------------------------------------------------------
 
 // --(rst-main-begin)--
+namespace {
+
+std::atomic<bool> shutdown_flag;
+
+void set_shutdown_flag(int) {
+  shutdown_flag = true;
+}
+
+} // namespace
+
 int caf_main(caf::actor_system& sys, const config& cfg) {
   namespace http = caf::net::http;
   namespace ssl = caf::net::ssl;
   namespace ws = caf::net::web_socket;
+  // Do a regular shutdown for CTRL+C and SIGTERM.
+  signal(SIGTERM, set_shutdown_flag);
+  signal(SIGINT, set_shutdown_flag);
   // Read the configuration.
   auto port = caf::get_or(cfg, "port", default_port);
   auto pem = ssl::format::pem;
@@ -45,11 +70,10 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
   auto max_connections = caf::get_or(cfg, "max-connections",
                                      default_max_connections);
   if (!key_file != !cert_file) {
-    std::cerr << "*** inconsistent TLS config: declare neither file or both\n";
+    sys.println("*** inconsistent TLS config: declare neither file or both");
     return EXIT_FAILURE;
   }
   // Open up a TCP port for incoming connections and start the server.
-  using trait = ws::default_trait;
   auto server
     = ws::with(sys)
         // Optionally enable TLS.
@@ -62,11 +86,11 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
         // Limit how many clients may be connected at any given time.
         .max_connections(max_connections)
         // Accept only requests for path "/".
-        .on_request([](ws::acceptor<>& acc) {
+        .on_request([&sys](ws::acceptor<>& acc) {
           // The header parameter contains fields from the WebSocket handshake
           // such as the path and HTTP header fields..
           auto path = acc.header().path();
-          std::cout << "*** new client request for path " << path << '\n';
+          sys.println("*** new client request for path {}", path);
           // Accept the WebSocket connection only if the path is "/".
           if (path == "/") {
             // Calling `accept` causes the server to acknowledge the client and
@@ -84,31 +108,30 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
           // Note: calling nothing on `acc` also rejects the connection.
         })
         // When started, run our worker actor to handle incoming connections.
-        .start([&sys](trait::acceptor_resource<> events) {
+        .start([&sys](auto events) {
           sys.spawn([events](caf::event_based_actor* self) {
             // For each buffer pair, we create a new flow ...
             self->make_observable()
               .from_resource(events) //
-              .for_each([self](const trait::accept_event<>& ev) {
+              .for_each([self](const auto& ev) {
                 // ... that simply pushes data back to the sender.
                 auto [pull, push] = ev.data();
                 pull.observe_on(self)
-                  .do_on_error([](const caf::error& what) { //
-                    std::cout << "*** connection closed: " << to_string(what)
-                              << "\n";
+                  .do_on_error([self](const caf::error& what) { //
+                    self->println("*** connection closed: {}", what);
                   })
-                  .do_on_complete([] { //
-                    std::cout << "*** connection closed\n";
+                  .do_on_complete([self] { //
+                    self->println("*** connection closed");
                   })
-                  .do_on_next([](const ws::frame& x) {
+                  .do_on_next([self](const ws::frame& x) {
                     if (x.is_binary()) {
-                      std::cout
-                        << "*** received a binary WebSocket frame of size "
-                        << x.size() << '\n';
+                      self->println(
+                        "*** received a binary WebSocket frame of size {}",
+                        x.size());
                     } else {
-                      std::cout
-                        << "*** received a text WebSocket frame of size "
-                        << x.size() << '\n';
+                      self->println(
+                        "*** received a text WebSocket frame of size {}",
+                        x.size());
                     }
                   })
                   .subscribe(push);
@@ -117,12 +140,14 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
         });
   // Report any error to the user.
   if (!server) {
-    std::cerr << "*** unable to run at port " << port << ": "
-              << to_string(server.error()) << '\n';
+    sys.println("*** unable to run at port {}: {}", port, server.error());
     return EXIT_FAILURE;
   }
-  // Note: the actor system will keep the application running for as long as the
-  // worker from .start() is still alive.
+  // Wait for CTRL+C or SIGTERM.
+  while (!shutdown_flag)
+    std::this_thread::sleep_for(250ms);
+  sys.println("*** shutting down");
+  server->dispose();
   return EXIT_SUCCESS;
 }
 // --(rst-main-end)--

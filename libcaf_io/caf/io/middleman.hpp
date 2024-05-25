@@ -4,28 +4,30 @@
 
 #pragma once
 
+#include "caf/io/broker.hpp"
+#include "caf/io/middleman_actor.hpp"
+#include "caf/io/network/multiplexer.hpp"
+
+#include "caf/actor_system.hpp"
+#include "caf/config_value.hpp"
+#include "caf/detail/io_export.hpp"
+#include "caf/detail/unique_function.hpp"
+#include "caf/expected.hpp"
+#include "caf/fwd.hpp"
+#include "caf/infer_handle.hpp"
+#include "caf/node_id.hpp"
+#include "caf/send.hpp"
+#include "caf/timespan.hpp"
+#include "caf/version.hpp"
+
 #include <chrono>
 #include <list>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 #include <vector>
-
-#include "caf/actor_system.hpp"
-#include "caf/config_value.hpp"
-#include "caf/detail/io_export.hpp"
-#include "caf/detail/remote_group_module.hpp"
-#include "caf/detail/unique_function.hpp"
-#include "caf/expected.hpp"
-#include "caf/fwd.hpp"
-#include "caf/io/broker.hpp"
-#include "caf/io/middleman_actor.hpp"
-#include "caf/io/network/multiplexer.hpp"
-#include "caf/node_id.hpp"
-#include "caf/proxy_registry.hpp"
-#include "caf/send.hpp"
-#include "caf/timespan.hpp"
 
 namespace caf::io {
 
@@ -82,18 +84,10 @@ public:
   template <class Handle>
   expected<uint16_t> publish(Handle&& whom, uint16_t port,
                              const char* in = nullptr, bool reuse = false) {
-    detail::type_list<typename std::decay<Handle>::type> tk;
+    type_list<std::decay_t<Handle>> tk;
     return publish(actor_cast<strong_actor_ptr>(std::forward<Handle>(whom)),
                    system().message_types(tk), port, in, reuse);
   }
-
-  /// Makes *all* local groups accessible via network
-  /// on address `addr` and `port`.
-  /// @returns The actual port the OS uses after `bind()`. If `port == 0`
-  ///          the OS chooses a random high-level port.
-  expected<uint16_t> publish_local_groups(uint16_t port,
-                                          const char* in = nullptr,
-                                          bool reuse = false);
 
   /// Unpublishes `whom` by closing `port` or all assigned ports if `port == 0`.
   /// @param whom Actor that should be unpublished at `port`.
@@ -110,29 +104,13 @@ public:
   ///          a remote actor or an `error`.
   template <class ActorHandle = actor>
   expected<ActorHandle> remote_actor(std::string host, uint16_t port) {
-    detail::type_list<ActorHandle> tk;
+    type_list<ActorHandle> tk;
     auto x = remote_actor(system().message_types(tk), std::move(host), port);
     if (!x)
       return x.error();
     CAF_ASSERT(x && *x);
     return actor_cast<ActorHandle>(std::move(*x));
   }
-
-  /// Tries to connect to a group that runs on a different node in the network.
-  /// @param group_locator Locator in the format `<group-name>@<host>:<port>`.
-  expected<group> remote_group(const std::string& group_locator);
-
-  /// Tries to connect to a group that runs on a different node in the network.
-  /// @param group_identifier Unique identifier of the group.
-  /// @param host Hostname or IP address of the remote CAF node.
-  /// @param port TCP port for connecting to the group name server of the node.
-  expected<group> remote_group(const std::string& group_identifier,
-                               const std::string& host, uint16_t port);
-
-  /// @private
-  void resolve_remote_group_intermediary(const node_id& origin,
-                                         const std::string& group_identifier,
-                                         std::function<void(actor)> callback);
 
   /// Returns the enclosing actor system.
   actor_system& system() {
@@ -223,14 +201,13 @@ public:
   /// Spawns a new functor-based broker.
   template <spawn_options Os = no_spawn_options,
             class F = std::function<void(broker*)>, class... Ts>
-  typename infer_handle_from_fun<F>::type spawn_broker(F fun, Ts&&... xs) {
+  infer_handle_from_fun_t<F> spawn_broker(F fun, Ts&&... xs) {
     using impl = infer_impl_from_fun_t<F>;
     static constexpr bool spawnable = detail::spawnable<F, impl, Ts...>();
     static_assert(spawnable,
                   "cannot spawn function-based broker with given arguments");
     actor_config cfg{&backend()};
-    detail::bool_token<spawnable> enabled;
-    return system().spawn_functor<Os>(enabled, cfg, fun,
+    return system().spawn_functor<Os>(std::bool_constant<spawnable>{}, cfg, fun,
                                       std::forward<Ts>(xs)...);
   }
 
@@ -239,9 +216,9 @@ public:
   /// @warning Blocks the caller for the timespan of the connection process.
   template <spawn_options Os = no_spawn_options,
             class F = std::function<void(broker*)>, class... Ts>
-  expected<typename infer_handle_from_fun<F>::type>
+  expected<infer_handle_from_fun_t<F>>
   spawn_client(F fun, const std::string& host, uint16_t port, Ts&&... xs) {
-    using impl = typename infer_handle_from_fun<F>::impl;
+    using impl = typename infer_handle_from_fun_trait_t<F>::impl;
     return spawn_client_impl<Os, impl>(std::move(fun), host, port,
                                        std::forward<Ts>(xs)...);
   }
@@ -250,9 +227,9 @@ public:
   /// @warning Blocks the caller until the server socket is initialized.
   template <spawn_options Os = no_spawn_options,
             class F = std::function<void(broker*)>, class... Ts>
-  expected<typename infer_handle_from_fun<F>::type>
+  expected<infer_handle_from_fun_t<F>>
   spawn_server(F fun, uint16_t& port, Ts&&... xs) {
-    using impl = typename infer_handle_from_fun<F>::impl;
+    using impl = typename infer_handle_from_fun_trait_t<F>::impl;
     return spawn_server_impl<Os, impl>(std::move(fun), port,
                                        std::forward<Ts>(xs)...);
   }
@@ -261,10 +238,10 @@ public:
   /// @warning Blocks the caller until the server socket is initialized.
   template <spawn_options Os = no_spawn_options,
             class F = std::function<void(broker*)>, class... Ts>
-  expected<typename infer_handle_from_fun<F>::type>
+  expected<infer_handle_from_fun_t<F>>
   spawn_server(F fun, const uint16_t& port, Ts&&... xs) {
     uint16_t dummy = port;
-    using impl = typename infer_handle_from_fun<F>::impl;
+    using impl = typename infer_handle_from_fun_trait_t<F>::impl;
     return spawn_server_impl<Os, impl>(std::move(fun), dummy,
                                        std::forward<Ts>(xs)...);
   }
@@ -272,27 +249,12 @@ public:
   /// Adds module-specific options to the config before loading the module.
   static void add_module_options(actor_system_config& cfg);
 
-  /// Returns a middleman using the default network backend.
-  static actor_system::module* make(actor_system&, detail::type_list<>);
+  /// Creates a new middleman instance.
+  static actor_system_module* make(actor_system&);
 
-  template <class Backend>
-  static actor_system::module*
-  make(actor_system& sys, detail::type_list<Backend>) {
-    class impl : public middleman {
-    public:
-      impl(actor_system& ref) : middleman(ref), backend_(&ref) {
-        // nop
-      }
-
-      network::multiplexer& backend() override {
-        return backend_;
-      }
-
-    private:
-      Backend backend_;
-    };
-    return new impl(sys);
-  }
+  /// Checks whether the ABI of the middleman is compatible with the CAF core.
+  /// Otherwise, calls `abort`.
+  static void check_abi_compatibility(version::abi_token token);
 
   /// @private
   actor get_named_broker(const std::string& name) {
@@ -314,7 +276,7 @@ protected:
 
 private:
   template <spawn_options Os, class Impl, class F, class... Ts>
-  expected<typename infer_handle_from_class<Impl>::type>
+  expected<infer_handle_from_class_t<Impl>>
   spawn_client_impl(F fun, const std::string& host, uint16_t port, Ts&&... xs) {
     auto eptr = backend().new_tcp_scribe(host, port);
     if (!eptr)
@@ -332,7 +294,7 @@ private:
   }
 
   template <spawn_options Os, class Impl, class F, class... Ts>
-  expected<typename infer_handle_from_class<Impl>::type>
+  expected<infer_handle_from_class_t<Impl>>
   spawn_server_impl(F fun, uint16_t& port, Ts&&... xs) {
     auto eptr = backend().new_tcp_doorman(port);
     if (!eptr)
@@ -362,8 +324,6 @@ private:
   expected<strong_actor_ptr> remote_actor(std::set<std::string> ifs,
                                           std::string host, uint16_t port);
 
-  static int exec_slave_mode(actor_system&, const actor_system_config&);
-
   /// The actor environment.
   actor_system& system_;
 
@@ -381,9 +341,6 @@ private:
 
   /// Handles to tasks that we spin up in start() and destroy in stop().
   std::vector<background_task_ptr> background_tasks_;
-
-  /// Manages groups that run on a different node in the network.
-  detail::remote_group_module_ptr remote_groups_;
 
   /// Stores the port where the Prometheus scraper is listening at (0 if no
   /// scraper is running in the background).

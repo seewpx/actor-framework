@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <utility>
-
 #include "caf/detail/int_list.hpp"
 #include "caf/detail/type_list.hpp"
+
+#include <utility>
 
 namespace caf::detail {
 
@@ -34,14 +34,29 @@ decltype(auto) apply_args(F& f, Tuple& tup) {
 }
 
 template <class F, long... Is, class Tuple>
-auto apply_moved_args(F& f, detail::int_list<Is...>, Tuple& tup)
-  -> decltype(f(std::move(get<Is>(tup))...)) {
+auto apply_moved_args(F& f, detail::int_list<Is...>,
+                      Tuple& tup) -> decltype(f(std::move(get<Is>(tup))...)) {
   return f(std::move(get<Is>(tup))...);
 }
 
+// Moves from `arg` if `T` is a value type and `U` is a mutable reference,
+// otherwise returns `arg` as-is.
+template <class T, class U>
+constexpr decltype(auto) auto_move(U& arg) noexcept {
+  if constexpr (std::is_const_v<U>)
+    return arg;
+  else
+    return static_cast<T&&>(arg);
+}
+
+template <class Fn, class FnArgs, long... Is, class Tuple>
+auto apply_args_auto_move(Fn& fn, FnArgs, detail::int_list<Is...>, Tuple& tup) {
+  return fn(auto_move<detail::tl_at_t<FnArgs, Is>>(get<Is>(tup))...);
+}
+
 template <class F, class Tuple, class... Ts>
-auto apply_args_prefixed(F& f, detail::int_list<>, Tuple&, Ts&&... xs)
-  -> decltype(f(std::forward<Ts>(xs)...)) {
+auto apply_args_prefixed(F& f, detail::int_list<>, Tuple&,
+                         Ts&&... xs) -> decltype(f(std::forward<Ts>(xs)...)) {
   return f(std::forward<Ts>(xs)...);
 }
 

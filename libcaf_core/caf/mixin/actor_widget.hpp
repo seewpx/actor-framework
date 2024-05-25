@@ -5,11 +5,11 @@
 #pragma once
 
 #include "caf/actor_companion.hpp"
+#include "caf/actor_system.hpp"
 #include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/make_actor.hpp"
 #include "caf/message_handler.hpp"
-
-#include "caf/scoped_execution_unit.hpp"
 
 CAF_PUSH_WARNINGS
 #include <QApplication>
@@ -36,13 +36,13 @@ public:
 
   ~actor_widget() {
     if (companion_)
-      self()->cleanup(error{}, &execution_unit_);
+      self()->cleanup(error{}, &(sys_->scheduler()));
   }
 
   void init(actor_system& system) {
+    sys_ = &system;
     alive_ = true;
-    execution_unit_.system_ptr(&system);
-    companion_ = actor_cast<strong_actor_ptr>(system.spawn<actor_companion>());
+    companion_ = system.make_companion();
     self()->on_enqueue([=](mailbox_element_ptr ptr) {
       qApp->postEvent(this, new event_type(std::move(ptr)));
     });
@@ -67,7 +67,7 @@ public:
     if (event->type() == static_cast<QEvent::Type>(EventId)) {
       auto ptr = dynamic_cast<event_type*>(event);
       if (ptr && alive_) {
-        switch (self()->activate(&execution_unit_, *(ptr->mptr))) {
+        switch (self()->activate(&(sys_->scheduler()), *(ptr->mptr))) {
           default:
             break;
         };
@@ -90,8 +90,8 @@ public:
   }
 
 private:
-  scoped_execution_unit execution_unit_;
-  strong_actor_ptr companion_;
+  actor_system* sys_ = nullptr;
+  intrusive_ptr<actor_companion> companion_;
   bool alive_;
 };
 

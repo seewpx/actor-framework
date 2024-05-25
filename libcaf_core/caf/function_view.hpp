@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include <functional>
-#include <new>
-#include <utility>
-
 #include "caf/detail/core_export.hpp"
 #include "caf/expected.hpp"
 #include "caf/response_type.hpp"
 #include "caf/scoped_actor.hpp"
 #include "caf/timespan.hpp"
 #include "caf/typed_actor.hpp"
+
+#include <functional>
+#include <new>
+#include <utility>
 
 namespace caf {
 
@@ -52,7 +52,11 @@ private:
   std::tuple<Ts...>* storage_;
 };
 
-struct CAF_CORE_EXPORT function_view_storage_catch_all {
+/// Convenience alias for `function_view_storage<T>::type`.
+template <class T>
+using function_view_storage_t = typename function_view_storage<T>::type;
+
+struct function_view_storage_catch_all {
   message* storage_;
 
   explicit function_view_storage_catch_all(message& ptr) : storage_(&ptr) {
@@ -68,7 +72,18 @@ struct CAF_CORE_EXPORT function_view_storage_catch_all {
 template <>
 class function_view_storage<message> {
 public:
-  using type = catch_all<function_view_storage_catch_all>;
+  using type = function_view_storage;
+
+  explicit function_view_storage(message& ptr) : storage_(&ptr) {
+    // nop
+  }
+
+  void operator()(message& msg) {
+    *storage_ = std::move(msg);
+  }
+
+private:
+  message* storage_;
 };
 
 template <class T>
@@ -156,18 +171,25 @@ public:
       return result_type{sec::bad_function_call};
     error err;
     if constexpr (std::is_void_v<value_type>) {
-      self_->request(impl_, timeout, std::forward<Ts>(xs)...)
-        .receive([&](error& x) { err = std::move(x); }, [] {});
+      self_->mail(std::forward<Ts>(xs)...)
+        .request(impl_, timeout)
+        .receive([] {}, [&err](error& x) { err = std::move(x); });
       if (err)
         return result_type{err};
       else
         return result_type{};
     } else {
       function_view_result<value_type> result;
-      self_->request(impl_, timeout, std::forward<Ts>(xs)...)
-        .receive([&](error& x) { err = std::move(x); },
-                 typename function_view_storage<value_type>::type{
-                   result.value});
+      self_->mail(std::forward<Ts>(xs)...)
+        .request(impl_, timeout)
+        .receive(function_view_storage_t<value_type>{result.value},
+                 [&err](error& x) {
+                   if (!x) {
+                     err = caf::make_error(sec::bad_function_call);
+                     return;
+                   }
+                   err = std::move(x);
+                 });
       if (err)
         return result_type{err};
       else

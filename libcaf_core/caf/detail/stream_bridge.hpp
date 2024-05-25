@@ -43,13 +43,15 @@ public:
 
   // -- implementation of subscription -----------------------------------------
 
-  bool disposed() const noexcept override;
+  flow::coordinator* parent() const noexcept override;
 
-  void dispose() override;
+  bool disposed() const noexcept override;
 
   void request(size_t n) override;
 
 private:
+  void do_dispose(bool from_external) override;
+
   bool initialized() const noexcept {
     return src_flow_id_ != 0;
   }

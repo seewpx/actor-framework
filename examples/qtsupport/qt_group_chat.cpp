@@ -7,20 +7,22 @@
 // - qt_group_chat -H localhost -p 4242 -n alice
 // - qt_group_chat -H localhost -p 4242 -n bob
 
-#include <cstdlib>
-#include <iostream>
-#include <map>
-#include <set>
-#include <sstream>
-#include <time.h>
-#include <vector>
-
-#include "caf/all.hpp"
 #include "caf/net/lp/with.hpp"
 #include "caf/net/middleman.hpp"
 
+#include "caf/all.hpp"
+
+#include <time.h>
+
+#include <cstdlib>
+#include <map>
+#include <set>
+#include <sstream>
+#include <vector>
+
 CAF_PUSH_WARNINGS
 #include "ui_chatwindow.h" // auto generated from chatwindow.ui
+
 #include <QApplication>
 #include <QMainWindow>
 CAF_POP_WARNINGS
@@ -55,7 +57,7 @@ int caf_main(actor_system& sys, const config& cfg) {
   auto host = caf::get_or(cfg, "host", default_host);
   auto name = caf::get_or(cfg, "name", "");
   if (name.empty()) {
-    std::cerr << "*** mandatory parameter 'name' missing or empty\n";
+    sys.println("*** mandatory parameter 'name' missing or empty");
     return EXIT_FAILURE;
   }
   // Spin up Qt.
@@ -66,16 +68,15 @@ int caf_main(actor_system& sys, const config& cfg) {
   Ui::ChatWindow helper;
   helper.setupUi(&mw);
   // Connect to the server.
-  auto conn
-    = caf::net::lp::with(sys)
-        .connect(host, port)
-        .start([&](auto pull, auto push) {
-          std::cout << "*** connected to " << host << ":" << port << '\n';
-          helper.chatwidget->init(sys, name, std::move(pull), std::move(push));
-        });
+  auto conn = caf::net::lp::with(sys)
+                .connect(host, port)
+                .start([&](auto pull, auto push) {
+                  sys.println("*** connected to {}:{}", host, port);
+                  helper.chatwidget->init(sys, name, std::move(pull),
+                                          std::move(push));
+                });
   if (!conn) {
-    std::cerr << "*** unable to connect to " << host << ":" << port << ": "
-              << to_string(conn.error()) << '\n';
+    sys.println("*** unable to connect to {}:{}: {}", host, port, conn.error());
     mw.close();
     return app.exec();
   }

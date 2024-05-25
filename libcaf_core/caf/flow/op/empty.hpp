@@ -12,39 +12,6 @@
 
 namespace caf::flow::op {
 
-template <class T>
-class empty_sub : public subscription::impl_base {
-public:
-  // -- constructors, destructors, and assignment operators --------------------
-
-  empty_sub(coordinator* ctx, observer<T> out)
-    : ctx_(ctx), out_(std::move(out)) {
-    // nop
-  }
-
-  // -- implementation of subscription -----------------------------------------
-
-  bool disposed() const noexcept override {
-    return !out_;
-  }
-
-  void dispose() override {
-    if (out_)
-      ctx_->delay_fn([out = std::move(out_)]() mutable { out.on_complete(); });
-  }
-
-  void request(size_t) override {
-    dispose();
-  }
-
-private:
-  /// Stores the context (coordinator) that runs this flow.
-  coordinator* ctx_;
-
-  /// Stores a handle to the subscribed observer.
-  observer<T> out_;
-};
-
 /// An observable that represents an empty range. As soon as an observer
 /// requests values from this observable, it calls `on_complete`.
 template <class T>
@@ -54,20 +21,16 @@ public:
 
   using super = cold<T>;
 
-  using output_type = T;
-
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit empty(coordinator* ctx) : super(ctx) {
+  explicit empty(coordinator* parent) : super(parent) {
     // nop
   }
 
   // -- implementation of observable<T>::impl ----------------------------------
 
-  disposable subscribe(observer<output_type> out) override {
-    auto ptr = make_counted<empty_sub<T>>(super::ctx_, out);
-    out.on_subscribe(subscription{ptr});
-    return disposable{std::move(ptr)};
+  disposable subscribe(observer<T> out) override {
+    return super::empty_subscription(out);
   }
 };
 

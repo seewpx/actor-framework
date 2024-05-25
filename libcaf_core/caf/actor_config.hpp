@@ -4,18 +4,15 @@
 
 #pragma once
 
-#include <string>
-
-#include "caf/abstract_channel.hpp"
-#include "caf/behavior.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/detail/unique_function.hpp"
 #include "caf/fwd.hpp"
-#include "caf/input_range.hpp"
+
+#include <string>
 
 namespace caf {
 
-/// Stores spawn-time flags and groups.
+/// Stores spawn-time settings and flags.
 class CAF_CORE_EXPORT actor_config {
 public:
   // -- member types -----------------------------------------------------------
@@ -24,16 +21,16 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit actor_config(execution_unit* host = nullptr,
+  explicit actor_config(scheduler* sched = nullptr,
                         local_actor* parent = nullptr);
 
   // -- member variables -------------------------------------------------------
 
-  execution_unit* host;
+  scheduler* sched;
   local_actor* parent;
-  int flags;
-  input_range<const group>* groups;
+  int flags = 0;
   detail::unique_function<behavior(local_actor*)> init_fun;
+  detail::mailbox_factory* mbox_factory = nullptr;
 
   // -- properties -------------------------------------------------------------
 

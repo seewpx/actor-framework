@@ -1,15 +1,15 @@
 // Simple HTTP server that tells the time.
 
+#include "caf/net/http/with.hpp"
+#include "caf/net/middleman.hpp"
+
 #include "caf/actor_system.hpp"
 #include "caf/actor_system_config.hpp"
 #include "caf/caf_main.hpp"
 #include "caf/deep_to_string.hpp"
 #include "caf/event_based_actor.hpp"
-#include "caf/net/http/with.hpp"
-#include "caf/net/middleman.hpp"
 #include "caf/scheduled_actor/flow.hpp"
 
-#include <iostream>
 #include <string>
 #include <utility>
 
@@ -30,6 +30,13 @@ struct config : caf::actor_system_config {
       .add<std::string>("key-file,k", "path to the private key file")
       .add<std::string>("cert-file,c", "path to the certificate file");
   }
+
+  caf::settings dump_content() const override {
+    auto result = actor_system_config::dump_content();
+    caf::put_missing(result, "port", default_port);
+    caf::put_missing(result, "max-connections", default_max_connections);
+    return result;
+  }
 };
 
 // -- main ---------------------------------------------------------------------
@@ -46,7 +53,7 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
   auto max_connections = caf::get_or(cfg, "max-connections",
                                      default_max_connections);
   if (!key_file != !cert_file) {
-    std::cerr << "*** inconsistent TLS config: declare neither file or both\n";
+    sys.println("*** inconsistent TLS config: declare neither file or both");
     return EXIT_FAILURE;
   }
   // Open up a TCP port for incoming connections and start the server.
@@ -71,15 +78,14 @@ int caf_main(caf::actor_system& sys, const config& cfg) {
         .start();
   // Report any error to the user.
   if (!server) {
-    std::cerr << "*** unable to run at port " << port << ": "
-              << to_string(server.error()) << '\n';
+    sys.println("*** unable to run at port {}: {}", port, server.error());
     return EXIT_FAILURE;
   }
   // Note: the actor system will only wait for actors on default. Since we don't
   // start actors, we need to block on something else.
-  std::cout << "Server is up and running. Press <enter> to shut down.\n";
+  sys.println("Server is up and running. Press <enter> to shut down.");
   getchar();
-  std::cout << "Terminating.\n";
+  sys.println("Terminating.");
   return EXIT_SUCCESS;
 }
 // --(rst-main-end)--

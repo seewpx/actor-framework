@@ -4,17 +4,17 @@
 
 #pragma once
 
-#include <vector>
-
 #include "caf/actor.hpp"
 #include "caf/actor_addr.hpp"
 #include "caf/actor_cast.hpp"
-#include "caf/check_typed_input.hpp"
 #include "caf/detail/core_export.hpp"
+#include "caf/detail/send_type_check.hpp"
 #include "caf/intrusive_ptr.hpp"
 #include "caf/message.hpp"
 #include "caf/message_id.hpp"
 #include "caf/response_type.hpp"
+
+#include <vector>
 
 namespace caf {
 
@@ -31,10 +31,6 @@ public:
 
   template <class...>
   friend class typed_response_promise;
-
-  // -- member types -----------------------------------------------------------
-
-  using forwarding_stack = std::vector<strong_actor_ptr>;
 
   // -- constructors, destructors, and assignment operators --------------------
 
@@ -58,13 +54,6 @@ public:
 
   /// Returns the source of the corresponding request.
   strong_actor_ptr source() const noexcept;
-
-  /// Returns the remaining stages for the corresponding request.
-  forwarding_stack stages() const;
-
-  /// Returns the actor that will receive the response, i.e.,
-  /// `stages().front()` if `!stages().empty()` or `source()` otherwise.
-  strong_actor_ptr next() const noexcept;
 
   /// Returns the message ID of the corresponding request.
   message_id id() const noexcept;
@@ -99,10 +88,10 @@ public:
   /// @post `pending() == false`
   template <class... Ts>
   void deliver(Ts... xs) {
-    using arg_types = detail::type_list<Ts...>;
-    static_assert(!detail::tl_exists<arg_types, detail::is_result>::value,
+    using arg_types = type_list<Ts...>;
+    static_assert(!detail::tl_exists_v<arg_types, detail::is_result>,
                   "delivering a result<T> is not supported");
-    static_assert(!detail::tl_exists<arg_types, detail::is_expected>::value,
+    static_assert(!detail::tl_exists_v<arg_types, detail::is_expected>,
                   "mixing expected<T> with regular values is not supported");
     if (pending()) {
       state_->deliver_impl(make_message(std::move(xs)...));
@@ -117,8 +106,7 @@ public:
   void deliver(expected<T> x) {
     if (pending()) {
       if (x) {
-        if constexpr (std::is_same<T, void>::value
-                      || std::is_same<T, unit_t>::value)
+        if constexpr (std::is_same_v<T, void> || std::is_same_v<T, unit_t>)
           state_->deliver_impl(make_message());
         else
           state_->deliver_impl(make_message(std::move(*x)));
@@ -133,27 +121,23 @@ public:
 
   /// Satisfies the promise by delegating to another actor.
   /// @post `pending() == false`
-  template <message_priority P = message_priority::normal, class Handle = actor,
+  template <message_priority P = message_priority::normal, class Handle,
             class... Ts>
-  delegated_response_type_t<
-    typename Handle::signatures,
-    detail::implicit_conversions_t<typename std::decay<Ts>::type>...>
-  delegate(const Handle& dest, Ts&&... xs) {
-    static_assert(sizeof...(Ts) > 0, "nothing to delegate");
-    using token = detail::type_list<typename detail::implicit_conversions<
-      typename std::decay<Ts>::type>::type...>;
-    static_assert(response_type_unbox<signatures_of_t<Handle>, token>::valid,
-                  "receiver does not accept given message");
+  delegated_response_type_t<Handle,
+                            detail::implicit_conversions_t<std::decay_t<Ts>>...>
+  delegate(const Handle& receiver, Ts&&... args) {
+    static_assert(sizeof...(Ts) > 0, "no message to send");
+    detail::send_type_check<none_t, Handle, Ts...>();
     if (pending()) {
       if constexpr (P == message_priority::high)
         state_->id = state_->id.with_high_priority();
-      if constexpr (std::is_same<detail::type_list<message>,
-                                 detail::type_list<std::decay_t<Ts>...>>::value)
-        state_->delegate_impl(actor_cast<abstract_actor*>(dest),
-                              std::forward<Ts>(xs)...);
+      if constexpr (std::is_same_v<type_list<message>,
+                                   type_list<std::decay_t<Ts>...>>)
+        state_->delegate_impl(actor_cast<abstract_actor*>(receiver),
+                              std::forward<Ts>(args)...);
       else
-        state_->delegate_impl(actor_cast<abstract_actor*>(dest),
-                              make_message(std::forward<Ts>(xs)...));
+        state_->delegate_impl(actor_cast<abstract_actor*>(receiver),
+                              make_message(std::forward<Ts>(args)...));
       state_.reset();
     }
     return {};
@@ -162,8 +146,7 @@ public:
 private:
   // -- constructors that are visible only to friends --------------------------
 
-  response_promise(local_actor* self, strong_actor_ptr source,
-                   forwarding_stack stages, message_id id);
+  response_promise(local_actor* self, strong_actor_ptr source, message_id id);
 
   response_promise(local_actor* self, mailbox_element& src);
 
@@ -199,7 +182,6 @@ private:
     mutable size_t ref_count = 1;
     strong_actor_ptr self;
     strong_actor_ptr source;
-    forwarding_stack stages;
     message_id id;
 
     friend void intrusive_ptr_add_ref(const state* ptr) {

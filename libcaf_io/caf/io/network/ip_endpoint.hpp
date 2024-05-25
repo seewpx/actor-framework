@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include "caf/detail/io_export.hpp"
+#include "caf/error.hpp"
+#include "caf/sec.hpp"
+
 #include <deque>
 #include <functional>
 #include <string>
 #include <vector>
-
-#include "caf/detail/io_export.hpp"
-#include "caf/error.hpp"
-#include "caf/sec.hpp"
 
 struct sockaddr;
 struct sockaddr_storage;
@@ -71,13 +71,17 @@ public:
 
 private:
   struct impl;
-  struct impl_deleter {
+  struct CAF_IO_EXPORT impl_deleter {
     void operator()(impl*) const;
   };
   std::unique_ptr<impl, impl_deleter> ptr_;
 };
 
 CAF_IO_EXPORT bool operator==(const ip_endpoint& lhs, const ip_endpoint& rhs);
+
+inline bool operator!=(const ip_endpoint& lhs, const ip_endpoint& rhs) {
+  return !(lhs == rhs);
+}
 
 CAF_IO_EXPORT std::string to_string(const ip_endpoint& ep);
 
@@ -86,6 +90,10 @@ CAF_IO_EXPORT std::string host(const ip_endpoint& ep);
 CAF_IO_EXPORT uint16_t port(const ip_endpoint& ep);
 
 CAF_IO_EXPORT uint32_t family(const ip_endpoint& ep);
+
+CAF_IO_EXPORT bool is_ipv4(const ip_endpoint& ep);
+
+CAF_IO_EXPORT bool is_ipv6(const ip_endpoint& ep);
 
 CAF_IO_EXPORT error_code<sec> load_endpoint(ip_endpoint& ep, uint32_t& f,
                                             std::string& h, uint16_t& p,

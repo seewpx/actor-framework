@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <string>
-
 #include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/detail/parser/chars.hpp"
 #include "caf/detail/parser/is_char.hpp"
 #include "caf/detail/parser/read_number.hpp"
@@ -17,6 +14,10 @@
 #include "caf/none.hpp"
 #include "caf/pec.hpp"
 #include "caf/timestamp.hpp"
+
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 CAF_PUSH_UNUSED_LABEL_WARNING
 
@@ -35,6 +36,8 @@ void read_number_or_timespan(State& ps, Consumer& consumer,
     Consumer* outer = nullptr;
     std::variant<none_t, int64_t, double> interim;
     void value(int64_t x) {
+      // If we see a second integer, we have a range of integers and forward all
+      // calls to the outer consumer.
       switch (++invocations) {
         case 1:
           interim = x;
@@ -48,6 +51,13 @@ void read_number_or_timespan(State& ps, Consumer& consumer,
           outer->value(x);
       }
     }
+    pec value(uint64_t x) {
+      if (x <= INT64_MAX) {
+        value(static_cast<int64_t>(x));
+        return pec::success;
+      }
+      return pec::integer_overflow;
+    }
     void value(double x) {
       interim = x;
     }
@@ -57,15 +67,8 @@ void read_number_or_timespan(State& ps, Consumer& consumer,
   auto has_int = [&] { return std::holds_alternative<int64_t>(ic.interim); };
   auto has_dbl = [&] { return std::holds_alternative<double>(ic.interim); };
   auto get_int = [&] { return std::get<int64_t>(ic.interim); };
-  auto g = make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character) {
-      if (has_dbl())
-        consumer.value(std::get<double>(ic.interim));
-      else if (has_int())
-        consumer.value(get_int());
-    }
-  });
-  static constexpr std::true_type enable_float = std::true_type{};
+  auto disabled = false;
+  constexpr auto enable_float = std::true_type{};
   // clang-format off
   start();
   state(init) {
@@ -80,13 +83,19 @@ void read_number_or_timespan(State& ps, Consumer& consumer,
   }
   term_state(has_integer) {
     fsm_epsilon(read_timespan(ps, consumer, get_int()),
-                done, "unmsh", g.disable())
+                done, "unmsh", disabled = true)
   }
   term_state(done) {
     // nop
   }
   fin();
   // clang-format on
+  if (!disabled && ps.code <= pec::trailing_character) {
+    if (has_dbl())
+      consumer.value(std::get<double>(ic.interim));
+    else if (has_int())
+      consumer.value(get_int());
+  }
 }
 
 } // namespace caf::detail::parser

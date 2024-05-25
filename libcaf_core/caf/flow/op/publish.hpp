@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "caf/detail/assert.hpp"
 #include "caf/flow/observer.hpp"
 #include "caf/flow/op/mcast.hpp"
 
@@ -21,17 +22,27 @@ public:
 
   using state_type = typename super::state_type;
 
+  using state_ptr_type = mcast_sub_state_ptr<T>;
+
   using src_ptr = intrusive_ptr<base<T>>;
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  publish(coordinator* ctx, src_ptr src,
+  publish(coordinator* parent, src_ptr src,
           size_t max_buf_size = defaults::flow::buffer_size)
-    : super(ctx), max_buf_size_(max_buf_size), source_(std::move(src)) {
-    // nop
+    : super(parent), max_buf_size_(max_buf_size), source_(std::move(src)) {
+    try_request_more_ = make_action([this] { this->try_request_more(); });
+  }
+
+  ~publish() override {
+    try_request_more_.dispose();
   }
 
   // -- ref counting (and disambiguation due to multiple base types) -----------
+
+  coordinator* parent() const noexcept override {
+    return super::parent_;
+  }
 
   void ref_coordinated() const noexcept override {
     this->ref();
@@ -86,7 +97,16 @@ public:
 
   void on_next(const T& item) override {
     --in_flight_;
-    this->push_all(item);
+    if (this->push_all(item)) {
+      if (in_ && this->has_observers()) {
+        // If push_all returns `true`, it means that all observers have consumed
+        // the item without buffering it. Hence, we know that
+        // this->max_buffered() is 0 and we can request more items from the
+        // source right away.
+        ++in_flight_;
+        in_.request(1);
+      }
+    }
   }
 
   void on_complete() override {
@@ -103,12 +123,22 @@ public:
       in_flight_ = max_buf_size_;
       in_.request(max_buf_size_);
     } else {
-      in.dispose();
+      in.cancel();
+    }
+  }
+
+  // -- implementation of ucast_sub_state_listener -----------------------------
+
+  void on_consumed_some(state_type*, size_t, size_t) override {
+    if (!try_request_more_pending_) {
+      try_request_more_pending_ = true;
+      super::parent_->delay(try_request_more_);
     }
   }
 
 protected:
   void try_request_more() {
+    try_request_more_pending_ = false;
     if (in_ && this->has_observers()) {
       if (auto buf_size = this->max_buffered() + in_flight_;
           max_buf_size_ > buf_size) {
@@ -120,26 +150,44 @@ protected:
   }
 
 private:
-  void on_dispose(state_type&) override {
+  void do_dispose(const state_ptr_type&, bool) override {
     try_request_more();
     if (auto_disconnect_ && connected_ && super::observer_count() == 0) {
       connected_ = false;
-      auto tmp = std::move(in_);
-      tmp.dispose();
+      in_.cancel();
     }
   }
 
-  void on_consumed_some(state_type&) override {
-    try_request_more();
-  }
-
+  /// Keeps track of the number of items that have been requested but that have
+  /// not yet been delivered.
   size_t in_flight_ = 0;
+
+  /// Maximum number of items to buffer.
   size_t max_buf_size_;
+
+  /// Our subscription for fetching items.
   subscription in_;
+
+  /// The source operator we subscribe to lazily.
   src_ptr source_;
+
+  /// Keeps track of whether we are connected to the source operator.
   bool connected_ = false;
+
+  /// The number of observers that need to connect before we connect to the
+  /// source operator.
   size_t auto_connect_threshold_ = std::numeric_limits<size_t>::max();
+
+  /// Whether to disconnect from the source operator when the last observer
+  /// unsubscribes.
   bool auto_disconnect_ = false;
+
+  /// Scheduled when on_consumed_some() is called. Having this as a member
+  /// variable avoids allocating a new action object for each call.
+  action try_request_more_;
+
+  /// Guards against scheduling `try_request_more_` while it is already pending.
+  bool try_request_more_pending_ = false;
 };
 
 } // namespace caf::flow::op

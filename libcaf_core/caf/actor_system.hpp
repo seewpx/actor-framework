@@ -4,44 +4,36 @@
 
 #pragma once
 
-#include <array>
-#include <atomic>
-#include <condition_variable>
-#include <cstddef>
-#include <functional>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <typeinfo>
-
 #include "caf/abstract_actor.hpp"
 #include "caf/actor_cast.hpp"
-#include "caf/actor_clock.hpp"
 #include "caf/actor_config.hpp"
-#include "caf/actor_profiler.hpp"
-#include "caf/actor_registry.hpp"
-#include "caf/actor_traits.hpp"
+#include "caf/actor_system_module.hpp"
+#include "caf/detail/actor_local_printer.hpp"
 #include "caf/detail/core_export.hpp"
+#include "caf/detail/format.hpp"
 #include "caf/detail/init_fun_factory.hpp"
-#include "caf/detail/private_thread_pool.hpp"
 #include "caf/detail/set_thread_name.hpp"
 #include "caf/detail/spawn_fwd.hpp"
 #include "caf/detail/spawnable.hpp"
 #include "caf/fwd.hpp"
-#include "caf/group_manager.hpp"
 #include "caf/infer_handle.hpp"
 #include "caf/is_typed_actor.hpp"
-#include "caf/logger.hpp"
 #include "caf/make_actor.hpp"
 #include "caf/prohibit_top_level_spawn_marker.hpp"
-#include "caf/scoped_execution_unit.hpp"
 #include "caf/spawn_options.hpp"
 #include "caf/string_algorithms.hpp"
-#include "caf/telemetry/metric_registry.hpp"
+#include "caf/term.hpp"
 #include "caf/type_id.hpp"
+#include "caf/version.hpp"
+
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <thread>
 
 namespace caf::detail {
+
+struct printer_actor_state;
 
 template <class>
 struct typed_mpi_access;
@@ -81,6 +73,11 @@ std::string get_rtti_from_mpi() {
   return f();
 }
 
+template <class... Ts>
+std::set<std::string> get_rtti_from_signatures(type_list<Ts...>) {
+  return std::set{get_rtti_from_mpi<Ts>()...};
+}
+
 } // namespace caf::detail
 
 namespace caf {
@@ -89,66 +86,58 @@ namespace caf {
 /// components such as a middleman.
 class CAF_CORE_EXPORT actor_system {
 public:
-  friend class logger;
-  friend class io::middleman;
-  friend class net::middleman;
   friend class abstract_actor;
+  friend class actor_ostream;
+  friend class detail::actor_system_access;
+  friend class local_actor;
+  friend class logger;
+  friend class net::middleman;
 
-  /// Returns the internal actor for dynamic spawn operations.
-  const strong_actor_ptr& spawn_serv() const {
-    return spawn_serv_;
-  }
+  template <class>
+  friend class actor_from_state_t;
 
-  /// Returns the internal actor for storing the runtime configuration
-  /// for this actor system.
-  const strong_actor_ptr& config_serv() const {
-    return config_serv_;
-  }
+  friend struct detail::printer_actor_state;
 
   actor_system() = delete;
   actor_system(const actor_system&) = delete;
   actor_system& operator=(const actor_system&) = delete;
 
-  /// An (optional) component of the actor system.
-  class CAF_CORE_EXPORT module {
+  /// Calls a cleanup function in its destructor for cleaning up global state.
+  class [[nodiscard]] global_state_guard {
   public:
-    enum id_t {
-      scheduler,
-      middleman,
-      openssl_manager,
-      network_manager,
-      num_ids
-    };
+    using void_fun_t = void (*)();
 
-    virtual ~module();
+    explicit global_state_guard(void_fun_t f) : fun_(f) {
+      // nop
+    }
 
-    /// Returns the human-readable name of the module.
-    const char* name() const noexcept;
+    global_state_guard(global_state_guard&& other) noexcept : fun_(other.fun_) {
+      other.fun_ = nullptr;
+    }
 
-    /// Starts any background threads needed by the module.
-    virtual void start() = 0;
+    global_state_guard& operator=(global_state_guard&& other) noexcept {
+      std::swap(fun_, other.fun_);
+      return *this;
+    }
 
-    /// Stops all background threads of the module.
-    virtual void stop() = 0;
+    global_state_guard() = delete;
 
-    /// Allows the module to change the
-    /// configuration of the actor system during startup.
-    virtual void init(actor_system_config&) = 0;
+    global_state_guard(const global_state_guard&) = delete;
 
-    /// Returns the identifier of this module.
-    virtual id_t id() const = 0;
+    global_state_guard& operator=(const global_state_guard&) = delete;
 
-    /// Returns a pointer to the subtype.
-    virtual void* subtype_ptr() = 0;
+    ~global_state_guard() {
+      if (fun_ != nullptr)
+        fun_();
+    }
+
+  private:
+    void_fun_t fun_;
   };
-
-  using module_ptr = std::unique_ptr<module>;
-
-  using module_array = std::array<module_ptr, module::num_ids>;
 
   /// An (optional) component of the actor system with networking
   /// capabilities.
-  class CAF_CORE_EXPORT networking_module : public module {
+  class CAF_CORE_EXPORT networking_module : public actor_system_module {
   public:
     ~networking_module() override;
 
@@ -220,31 +209,29 @@ public:
 
   /// @warning The system stores a reference to `cfg`, which means the
   ///          config object must outlive the actor system.
-  explicit actor_system(actor_system_config& cfg);
+  explicit actor_system(actor_system_config& cfg,
+                        version::abi_token = make_abi_token());
 
   virtual ~actor_system();
 
   /// A message passing interface (MPI) in run-time checkable representation.
   using mpi = std::set<std::string>;
 
-  template <class T,
-            class E = typename std::enable_if<!is_typed_actor<T>::value>::type>
-  mpi message_types(detail::type_list<T>) const {
+  template <class T, class E = std::enable_if_t<!is_typed_actor_v<T>>>
+  mpi message_types(type_list<T>) const {
     return mpi{};
   }
 
   template <class... Ts>
-  mpi message_types(detail::type_list<typed_actor<Ts...>>) const {
+  mpi message_types(type_list<typed_actor<Ts...>>) const {
     static_assert(sizeof...(Ts) > 0, "empty typed actor handle given");
-    mpi result{detail::get_rtti_from_mpi<Ts>()...};
-    return result;
+    return detail::get_rtti_from_signatures(
+      typename typed_actor<Ts...>::signatures{});
   }
 
-  template <class T,
-            class E
-            = typename std::enable_if<!detail::is_type_list<T>::value>::type>
+  template <class T, class E = std::enable_if_t<!detail::is_type_list_v<T>>>
   mpi message_types(const T&) const {
-    detail::type_list<T> token;
+    type_list<T> token;
     return message_types(token);
   }
 
@@ -252,7 +239,7 @@ public:
   /// interface using portable names;
   template <class T>
   mpi message_types() const {
-    detail::type_list<T> token;
+    type_list<T> token;
     return message_types(token);
   }
 
@@ -275,32 +262,64 @@ public:
     return assignable(xs, message_types<T>());
   }
 
-  /// Returns the metrics registry for this system.
-  telemetry::metric_registry& metrics() noexcept {
-    return metrics_;
-  }
+  // -- properties -------------------------------------------------------------
+
+  base_metrics_t& base_metrics() noexcept;
+
+  const base_metrics_t& base_metrics() const noexcept;
+
+  const actor_metric_families_t& actor_metric_families() const noexcept;
+
+  /// Returns the global meta objects guard.
+  detail::global_meta_objects_guard_type meta_objects_guard() const noexcept;
+
+  /// Returns the `caf.metrics-filters.actors.includes` parameter.
+  span<const std::string> metrics_actors_includes() const noexcept;
+
+  /// Returns the `caf.metrics-filters.actors.excludes` parameter.
+  span<const std::string> metrics_actors_excludes() const noexcept;
+
+  /// Returns the configuration of this actor system.
+  const actor_system_config& config() const;
+
+  /// Returns the system-wide clock.
+  actor_clock& clock() noexcept;
+
+  /// Returns the number of detached actors.
+  size_t detached_actors() const noexcept;
+
+  /// Returns whether this actor system calls `await_all_actors_done`
+  /// in its destructor before shutting down.
+  bool await_actors_before_shutdown() const;
+
+  /// Configures whether this actor system calls `await_all_actors_done`
+  /// in its destructor before shutting down.
+  void await_actors_before_shutdown(bool new_value);
+
+  /// Returns the internal actor for dynamic spawn operations.
+  const strong_actor_ptr& spawn_serv() const;
+
+  /// Returns the internal actor for storing the runtime configuration
+  /// for this actor system.
+  const strong_actor_ptr& config_serv() const;
 
   /// Returns the metrics registry for this system.
-  const telemetry::metric_registry& metrics() const noexcept {
-    return metrics_;
-  }
+  telemetry::metric_registry& metrics() noexcept;
+
+  /// Returns the metrics registry for this system.
+  const telemetry::metric_registry& metrics() const noexcept;
 
   /// Returns the host-local identifier for this system.
-  const node_id& node() const {
-    return node_;
-  }
+  const node_id& node() const;
 
   /// Returns the scheduler instance.
-  scheduler::abstract_coordinator& scheduler();
+  caf::scheduler& scheduler();
 
   /// Returns the system-wide event logger.
   caf::logger& logger();
 
   /// Returns the system-wide actor registry.
   actor_registry& registry();
-
-  /// Returns the system-wide group manager.
-  group_manager& groups();
 
   /// Returns `true` if the I/O module is available, `false` otherwise.
   bool has_middleman() const;
@@ -323,10 +342,6 @@ public:
   /// @throws `std::logic_error` if module is not loaded.
   net::middleman& network_manager();
 
-  /// Returns a dummy execution unit that forwards
-  /// everything to the scheduler.
-  scoped_execution_unit* dummy_execution_unit();
-
   /// Returns a new actor ID.
   actor_id next_actor_id();
 
@@ -347,6 +362,9 @@ public:
   /// if this system loses connection to `node`.
   void demonitor(const node_id& node, const actor_addr& observer);
 
+  /// Creates a new actor companion and returns a smart pointer to it.
+  intrusive_ptr<actor_companion> make_companion();
+
   /// Called by `spawn` when used to create a class-based actor to
   /// apply automatic conversions to `xs` before spawning the actor.
   /// Should not be called by users of the library directly.
@@ -365,6 +383,7 @@ public:
   infer_handle_from_class_t<C> spawn(Ts&&... xs) {
     check_invariants<C>();
     actor_config cfg;
+    cfg.mbox_factory = mailbox_factory();
     return spawn_impl<C, Os>(cfg, detail::spawn_fwd<Ts>(xs)...);
   }
 
@@ -403,17 +422,27 @@ public:
     static_assert(spawnable,
                   "cannot spawn function-based actor with given arguments");
     actor_config cfg;
-    return spawn_functor<Os>(detail::bool_token<spawnable>{}, cfg, fun,
+    cfg.mbox_factory = mailbox_factory();
+    return spawn_functor<Os>(std::bool_constant<spawnable>{}, cfg, fun,
                              std::forward<Ts>(xs)...);
+  }
+
+  /// Returns a new stateful actor.
+  template <spawn_options Options = no_spawn_options, class CustomSpawn,
+            class... Args>
+  typename CustomSpawn::handle_type spawn(CustomSpawn, Args&&... args) {
+    actor_config cfg{&scheduler(), nullptr};
+    cfg.mbox_factory = mailbox_factory();
+    return CustomSpawn::template do_spawn<Options>(*this, cfg,
+                                                   std::forward<Args>(args)...);
   }
 
   /// Returns a new actor with run-time type `name`, constructed
   /// with the arguments stored in `args`.
   /// @experimental
-  template <class Handle,
-            class E = typename std::enable_if<is_handle<Handle>::value>::type>
+  template <class Handle, class E = std::enable_if_t<is_handle_v<Handle>>>
   expected<Handle>
-  spawn(const std::string& name, message args, execution_unit* ctx = nullptr,
+  spawn(const std::string& name, message args, caf::scheduler* ctx = nullptr,
         bool check_interface = true, const mpi* expected_ifs = nullptr) {
     mpi tmp;
     if (check_interface && !expected_ifs) {
@@ -426,111 +455,33 @@ public:
     return actor_cast<Handle>(std::move(*res));
   }
 
-  /// Spawns a class-based actor `T` immediately joining the groups in
-  /// range `[first, last)`.
-  /// @private
-  template <class T, spawn_options Os, class Iter, class... Ts>
-  infer_handle_from_class_t<T>
-  spawn_class_in_groups(actor_config& cfg, Iter first, Iter last, Ts&&... xs) {
-    static_assert(std::is_same<infer_handle_from_class_t<T>, actor>::value,
-                  "only dynamically-typed actors can be spawned in a group");
-    check_invariants<T>();
-    auto irange = make_input_range(first, last);
-    cfg.groups = &irange;
-    return spawn_class<T, Os>(cfg, std::forward<Ts>(xs)...);
+  // -- println ----------------------------------------------------------------
+
+  /// Adds a new line to stdout.
+  template <class... Args>
+  void println(term color, std::string_view fmt, Args&&... args) {
+    auto buf = std::vector<char>{};
+    buf.reserve(fmt.size() + 64);
+    detail::format_to(std::back_inserter(buf), fmt,
+                      std::forward<Args>(args)...);
+    buf.push_back('\n');
+    do_print(color, buf.data(), buf.size());
   }
 
-  /// Spawns a class-based actor `T` immediately joining the groups in
-  /// range `[first, last)`.
-  /// @private
-  template <spawn_options Os, class Iter, class F, class... Ts>
-  infer_handle_from_fun_t<F> spawn_fun_in_groups(actor_config& cfg, Iter first,
-                                                 Iter second, F& fun,
-                                                 Ts&&... xs) {
-    using impl = infer_impl_from_fun_t<F>;
-    check_invariants<impl>();
-    using traits = actor_traits<impl>;
-    static_assert(traits::is_dynamically_typed,
-                  "only dynamically-typed actors can join groups");
-    static constexpr bool spawnable = detail::spawnable<F, impl, Ts...>();
-    static_assert(spawnable,
-                  "cannot spawn function-based actor with given arguments");
-    static constexpr bool enabled = traits::is_dynamically_typed && spawnable;
-    auto irange = make_input_range(first, second);
-    cfg.groups = &irange;
-    return spawn_functor<Os>(detail::bool_token<enabled>{}, cfg, fun,
-                             std::forward<Ts>(xs)...);
+  /// Adds a new line to stdout.
+  template <class... Args>
+  void println(std::string_view fmt, Args&&... args) {
+    println(term::reset, fmt, std::forward<Args>(args)...);
   }
 
-  /// Returns a new functor-based actor subscribed to all groups in `gs`.
-  template <spawn_options Os = no_spawn_options, class F, class... Ts>
-  infer_handle_from_fun_t<F>
-  spawn_in_groups(std::initializer_list<group> gs, F fun, Ts&&... xs) {
-    actor_config cfg;
-    return spawn_fun_in_groups<Os>(cfg, gs.begin(), gs.end(), fun,
-                                   std::forward<Ts>(xs)...);
-  }
-
-  /// Returns a new functor-based actor subscribed to all groups in `gs`.
-  template <spawn_options Os = no_spawn_options, class Gs, class F, class... Ts>
-  infer_handle_from_fun_t<F> spawn_in_groups(const Gs& gs, F fun, Ts&&... xs) {
-    actor_config cfg;
-    return spawn_fun_in_groups<Os>(cfg, gs.begin(), gs.end(), fun,
-                                   std::forward<Ts>(xs)...);
-  }
-
-  /// Returns a new functor-based actor subscribed to all groups in `gs`.
-  template <spawn_options Os = no_spawn_options, class F, class... Ts>
-  infer_handle_from_fun_t<F>
-  spawn_in_group(const group& grp, F fun, Ts&&... xs) {
-    return spawn_in_groups<Os>({grp}, std::move(fun), std::forward<Ts>(xs)...);
-  }
-
-  /// Returns a new class-based actor subscribed to all groups in `gs`.
-  template <class T, spawn_options Os = no_spawn_options, class... Ts>
-  infer_handle_from_class_t<T>
-  spawn_in_groups(std::initializer_list<group> gs, Ts&&... xs) {
-    actor_config cfg;
-    return spawn_class_in_groups<T, Os>(cfg, gs.begin(), gs.end(),
-                                        std::forward<Ts>(xs)...);
-  }
-
-  /// Returns a new class-based actor subscribed to all groups in `gs`.
-  template <class T, spawn_options Os = no_spawn_options, class Gs, class... Ts>
-  infer_handle_from_class_t<T> spawn_in_groups(const Gs& gs, Ts&&... xs) {
-    actor_config cfg;
-    return spawn_class_in_groups<T, Os>(cfg, gs.begin(), gs.end(),
-                                        std::forward<Ts>(xs)...);
-  }
-
-  /// Returns a new class-based actor subscribed to all groups in `gs`.
-  template <class T, spawn_options Os = no_spawn_options, class... Ts>
-  infer_handle_from_class_t<T> spawn_in_group(const group& grp, Ts&&... xs) {
-    return spawn_in_groups<T, Os>({grp}, std::forward<Ts>(xs)...);
-  }
-
-  /// Returns whether this actor system calls `await_all_actors_done`
-  /// in its destructor before shutting down.
-  bool await_actors_before_shutdown() const {
-    return await_actors_before_shutdown_;
-  }
-
-  /// Configures whether this actor system calls `await_all_actors_done`
-  /// in its destructor before shutting down.
-  void await_actors_before_shutdown(bool x) {
-    await_actors_before_shutdown_ = x;
-  }
-
-  /// Returns the configuration of this actor system.
-  const actor_system_config& config() const {
-    return cfg_;
-  }
-
-  /// Returns the system-wide clock.
-  actor_clock& clock() noexcept;
-
-  /// Returns the number of detached actors.
-  size_t detached_actors() const noexcept;
+  /// Redirects the output of `println` to a custom function.
+  /// @param out The new output stream to write to.
+  /// @param write The new print function to use. Must not be null.
+  /// @param cleanup Deletes the output stream when the actor system shuts down.
+  ///                May be null if no cleanup is necessary.
+  void redirect_text_output(void* out,
+                            void (*write)(void*, term, const char*, size_t),
+                            void (*cleanup)(void*));
 
   /// @cond PRIVATE
 
@@ -544,27 +495,14 @@ public:
 
   template <class F>
   std::thread launch_thread(const char* thread_name, thread_owner tag, F fun) {
-    auto body = [this, thread_name, tag, f{std::move(fun)}](auto guard) {
-      CAF_IGNORE_UNUSED(guard);
+    auto body = [this, thread_name, tag, f = std::move(fun)](auto) {
       CAF_SET_LOGGER_SYS(this);
       detail::set_thread_name(thread_name);
       thread_started(tag);
       f();
       thread_terminates();
     };
-    return std::thread{std::move(body), meta_objects_guard_};
-  }
-
-  auto meta_objects_guard() const noexcept {
-    return meta_objects_guard_;
-  }
-
-  const auto& metrics_actors_includes() const noexcept {
-    return metrics_actors_includes_;
-  }
-
-  const auto& metrics_actors_excludes() const noexcept {
-    return metrics_actors_excludes_;
+    return std::thread{std::move(body), meta_objects_guard()};
   }
 
   template <class C, spawn_options Os, class... Ts>
@@ -575,16 +513,13 @@ public:
       cfg.flags |= abstract_actor::is_detached_flag;
     if constexpr (has_hide_flag(Os))
       cfg.flags |= abstract_actor::is_hidden_flag;
-    if (cfg.host == nullptr)
-      cfg.host = dummy_execution_unit();
+    if (cfg.sched == nullptr)
+      cfg.sched = &scheduler();
     CAF_SET_LOGGER_SYS(this);
     auto res = make_actor<C>(next_actor_id(), node(), this, cfg,
                              std::forward<Ts>(xs)...);
     auto ptr = static_cast<C*>(actor_cast<abstract_actor*>(res));
-#ifdef CAF_ENABLE_ACTOR_PROFILER
-    profiler_add_actor(*ptr, cfg.parent);
-#endif
-    ptr->launch(cfg.host, has_lazy_init_flag(Os), has_hide_flag(Os));
+    ptr->launch(cfg.sched, has_lazy_init_flag(Os), has_hide_flag(Os));
     return res;
   }
 
@@ -626,8 +561,10 @@ public:
     launcher& operator=(const launcher&) = delete;
 
     ~launcher() {
-      if (ready)
+      if (ready) {
         fn();
+        fn.~F();
+      }
     }
 
     void operator()() {
@@ -640,7 +577,6 @@ public:
   private:
     // @pre `ready == true`
     void reset() {
-      CAF_ASSERT(ready);
       ready = false;
       fn.~F();
     }
@@ -657,179 +593,91 @@ public:
   /// @returns A pointer to the new actor and a function object that the caller
   ///          must invoke to launch the actor. After the actor started running,
   ///          the caller *must not* access the pointer again.
-  template <class Impl, spawn_options = no_spawn_options, class... Ts>
+  template <class Impl = event_based_actor, spawn_options Os = no_spawn_options,
+            class... Ts>
   auto spawn_inactive(Ts&&... xs) {
+    spawn_inactive_check(
+      std::bool_constant<std::is_same_v<Impl, event_based_actor>>{});
     static_assert(std::is_base_of_v<scheduled_actor, Impl>,
                   "only scheduled actors may get spawned inactively");
     CAF_SET_LOGGER_SYS(this);
-    actor_config cfg{dummy_execution_unit(), nullptr};
+    actor_config cfg{&scheduler(), nullptr};
+    cfg.flags = abstract_actor::is_inactive_flag;
+    if constexpr (has_detach_flag(Os))
+      cfg.flags |= abstract_actor::is_detached_flag;
+    if constexpr (has_hide_flag(Os))
+      cfg.flags |= abstract_actor::is_hidden_flag;
+    cfg.mbox_factory = mailbox_factory();
     auto res = make_actor<Impl>(next_actor_id(), node(), this, cfg,
                                 std::forward<Ts>(xs)...);
     auto ptr = static_cast<Impl*>(actor_cast<abstract_actor*>(res));
-#ifdef CAF_ENABLE_ACTOR_PROFILER
-    profiler_add_actor(*ptr, cfg.parent);
-#endif
-    auto launch = [res, host{cfg.host}] {
+    auto launch = [strong_ptr = std::move(res), sched = cfg.sched] {
       // Note: we pass `res` to this lambda instead of `ptr` to keep a strong
       //       reference to the actor.
-      static_cast<Impl*>(actor_cast<abstract_actor*>(res))
-        ->launch(host, false, false);
+      auto dptr = static_cast<Impl*>(actor_cast<abstract_actor*>(strong_ptr));
+      dptr->unsetf(abstract_actor::is_inactive_flag);
+      dptr->launch(sched, has_lazy_init_flag(Os), has_hide_flag(Os));
     };
     return std::make_tuple(ptr, launcher<decltype(launch)>(std::move(launch)));
-  }
-
-  void profiler_add_actor(const local_actor& self, const local_actor* parent) {
-    if (profiler_)
-      profiler_->add_actor(self, parent);
-  }
-
-  void profiler_remove_actor(const local_actor& self) {
-    if (profiler_)
-      profiler_->remove_actor(self);
-  }
-
-  void profiler_before_processing(const local_actor& self,
-                                  const mailbox_element& element) {
-    if (profiler_)
-      profiler_->before_processing(self, element);
-  }
-
-  void profiler_after_processing(const local_actor& self,
-                                 invoke_message_result result) {
-    if (profiler_)
-      profiler_->after_processing(self, result);
-  }
-
-  void profiler_before_sending(const local_actor& self,
-                               mailbox_element& element) {
-    if (profiler_)
-      profiler_->before_sending(self, element);
-  }
-
-  void profiler_before_sending_scheduled(const local_actor& self,
-                                         caf::actor_clock::time_point timeout,
-                                         mailbox_element& element) {
-    if (profiler_)
-      profiler_->before_sending_scheduled(self, timeout, element);
-  }
-
-  base_metrics_t& base_metrics() noexcept {
-    return base_metrics_;
-  }
-
-  const auto& base_metrics() const noexcept {
-    return base_metrics_;
-  }
-
-  const auto& actor_metric_families() const noexcept {
-    return actor_metric_families_;
-  }
-
-  tracing_data_factory* tracing_context() const noexcept {
-    return tracing_context_;
   }
 
   detail::private_thread* acquire_private_thread();
 
   void release_private_thread(detail::private_thread*);
 
+  virtual detail::actor_local_printer_ptr printer_for(local_actor* self);
+
+  using custom_setup_fn = void (*)(actor_system&, actor_system_config&, void*);
+
+  actor_system(actor_system_config& cfg, custom_setup_fn custom_setup,
+               void* custom_setup_data, version::abi_token = make_abi_token());
+
   /// @endcond
 
 private:
+  [[deprecated("spawn_inactive may only be used with event_based_actor")]]
+  void spawn_inactive_check(std::false_type) {
+    // nop
+  }
+
+  void spawn_inactive_check(std::true_type) {
+    // nop
+  }
+
   template <class T>
   void check_invariants() {
-    static_assert(!std::is_base_of<prohibit_top_level_spawn_marker, T>::value,
+    static_assert(!std::is_base_of_v<prohibit_top_level_spawn_marker, T>,
                   "This actor type cannot be spawned through an actor system. "
                   "Probably you have tried to spawn a broker.");
   }
 
   expected<strong_actor_ptr>
-  dyn_spawn_impl(const std::string& name, message& args, execution_unit* ctx,
+  dyn_spawn_impl(const std::string& name, message& args, caf::scheduler* ctx,
                  bool check_interface, const mpi* expected_ifs);
 
-  /// Sets the internal actor for dynamic spawn operations.
-  void spawn_serv(strong_actor_ptr x) {
-    spawn_serv_ = std::move(x);
-  }
+  detail::mailbox_factory* mailbox_factory();
 
-  /// Sets the internal actor for storing the runtime configuration.
-  void config_serv(strong_actor_ptr x) {
-    config_serv_ = std::move(x);
-  }
+  void do_print(term color, const char* buf, size_t num_bytes);
+
+  strong_actor_ptr legacy_printer_actor() const;
+
+  // -- callbacks for actor_system_access --------------------------------------
+
+  void set_logger(intrusive_ptr<caf::logger> ptr);
+
+  void set_clock(std::unique_ptr<actor_clock> ptr);
+
+  void set_scheduler(std::unique_ptr<caf::scheduler> ptr);
+
+  void set_legacy_printer_actor(strong_actor_ptr ptr);
+
+  void set_node(node_id id);
 
   // -- member variables -------------------------------------------------------
 
-  /// Provides system-wide callbacks for several actor operations.
-  actor_profiler* profiler_;
+  class impl;
 
-  /// Used to generate ascending actor IDs.
-  std::atomic<size_t> ids_;
-
-  /// Manages all metrics collected by the system.
-  telemetry::metric_registry metrics_;
-
-  /// Stores all metrics that the actor system collects by default.
-  base_metrics_t base_metrics_;
-
-  /// Identifies this actor system in a distributed setting.
-  node_id node_;
-
-  /// Manages log output.
-  intrusive_ptr<caf::logger> logger_;
-
-  /// Maps well-known actor names to actor handles.
-  actor_registry registry_;
-
-  /// Maps well-known group names to group handles.
-  group_manager groups_;
-
-  /// Stores optional actor system components.
-  module_array modules_;
-
-  /// Provides pseudo scheduling context to actors.
-  scoped_execution_unit dummy_execution_unit_;
-
-  /// Stores whether the system should wait for running actors on shutdown.
-  bool await_actors_before_shutdown_;
-
-  /// Stores config parameters.
-  strong_actor_ptr config_serv_;
-
-  /// Allows fully dynamic spawning of actors.
-  strong_actor_ptr spawn_serv_;
-
-  /// The system-wide, user-provided configuration.
-  actor_system_config& cfg_;
-
-  /// Stores whether the logger has run its destructor and stopped any thread,
-  /// file handle, etc.
-  std::atomic<bool> logger_dtor_done_;
-
-  /// Guards `logger_dtor_done_`.
-  mutable std::mutex logger_dtor_mtx_;
-
-  /// Allows waiting on specific values for `logger_dtor_done_`.
-  mutable std::condition_variable logger_dtor_cv_;
-
-  /// Stores the system-wide factory for deserializing tracing data.
-  tracing_data_factory* tracing_context_;
-
-  /// Caches the configuration parameter `caf.metrics-filters.actors.includes`
-  /// for faster lookups at runtime.
-  std::vector<std::string> metrics_actors_includes_;
-
-  /// Caches the configuration parameter `caf.metrics-filters.actors.excludes`
-  /// for faster lookups at runtime.
-  std::vector<std::string> metrics_actors_excludes_;
-
-  /// Caches families for optional actor metrics.
-  actor_metric_families_t actor_metric_families_;
-
-  /// Manages threads for detached actors.
-  detail::private_thread_pool private_threads_;
-
-  /// Ties the lifetime of the meta objects table to the actor system.
-  detail::global_meta_objects_guard_type meta_objects_guard_;
+  impl* impl_;
 };
 
 } // namespace caf

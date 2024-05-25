@@ -9,6 +9,7 @@
 #include "caf/async/producer.hpp"
 #include "caf/config.hpp"
 #include "caf/defaults.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/error.hpp"
 #include "caf/intrusive_ptr.hpp"
 #include "caf/make_counted.hpp"
@@ -258,14 +259,13 @@ public:
     }
     if (!buf_.empty() || !flags_.closed) {
       return {true, consumed};
-    } else {
-      consumer_ = nullptr;
-      if (err_)
-        dst.on_error(err_);
-      else
-        dst.on_complete();
-      return {false, consumed};
     }
+    consumer_ = nullptr;
+    if (!err_)
+      dst.on_complete();
+    else
+      dst.on_error(err_);
+    return {false, consumed};
   }
 
 private:
@@ -417,12 +417,16 @@ public:
       buf->cancel();
   }
 
-  explicit operator bool() const noexcept {
+  [[nodiscard]] bool valid() const noexcept {
     return ctrl_ != nullptr;
   }
 
+  explicit operator bool() const noexcept {
+    return valid();
+  }
+
   bool operator!() const noexcept {
-    return ctrl_ == nullptr;
+    return !valid();
   }
 
   friend bool operator==(const consumer_resource& lhs,
@@ -495,12 +499,16 @@ public:
       buf->abort(std::move(reason));
   }
 
-  explicit operator bool() const noexcept {
+  [[nodiscard]] bool valid() const noexcept {
     return ctrl_ != nullptr;
   }
 
+  explicit operator bool() const noexcept {
+    return valid();
+  }
+
   bool operator!() const noexcept {
-    return ctrl_ == nullptr;
+    return !valid();
   }
 
   friend bool operator==(const producer_resource& lhs,

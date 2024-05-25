@@ -6,13 +6,13 @@
 
 #include "caf/cow_tuple.hpp"
 #include "caf/cow_vector.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/flow/coordinator.hpp"
 #include "caf/flow/observer.hpp"
 #include "caf/flow/op/cold.hpp"
 #include "caf/flow/op/ucast.hpp"
 #include "caf/flow/subscription.hpp"
 #include "caf/intrusive_ptr.hpp"
-#include "caf/make_counted.hpp"
 
 #include <memory>
 #include <vector>
@@ -21,16 +21,35 @@ namespace caf::flow::op {
 
 /// @relates prefix_and_tail
 template <class T>
-class prefix_and_tail_sub : public detail::plain_ref_counted,
+class prefix_and_tail_sub : public subscription::impl_base,
                             public observer_impl<T>,
-                            public subscription_impl {
+                            public ucast_sub_state_listener<T> {
 public:
+  // -- member types -----------------------------------------------------------
+
   using tuple_t = cow_tuple<cow_vector<T>, observable<T>>;
 
-  prefix_and_tail_sub(coordinator* ctx, observer<tuple_t> out,
+  using state_type = ucast_sub_state<T>;
+
+  // -- constructors, destructors, and assignment operators --------------------
+
+  prefix_and_tail_sub(coordinator* parent, observer<tuple_t> out,
                       size_t prefix_size)
-    : ctx_(ctx), out_(std::move(out)), prefix_size_(prefix_size) {
+    : parent_(parent), out_(std::move(out)), prefix_size_(prefix_size) {
     prefix_buf_.reserve(prefix_size);
+  }
+
+  ~prefix_and_tail_sub() {
+    if (sink_) {
+      sink_->state().listener = nullptr;
+      sink_->close();
+    }
+  }
+
+  // -- implementation of observer ---------------------------------------------
+
+  coordinator* parent() const noexcept override {
+    return parent_;
   }
 
   void ref_coordinated() const noexcept override {
@@ -52,8 +71,8 @@ public:
       prefix_buf_.push_back(item);
       if (prefix_buf_.size() == prefix_size_) {
         // Create the sink to deliver to tail lazily and deliver the prefix.
-        sink_ = make_counted<ucast<T>>(ctx_);
-        set_callbacks();
+        sink_ = parent_->add_child(std::in_place_type<ucast<T>>);
+        sink_->state().listener = this;
         // Force member to be null before calling on_next / on_complete.
         auto out = std::move(out_);
         auto tup = make_cow_tuple(cow_vector<T>{std::move(prefix_buf_)},
@@ -66,25 +85,25 @@ public:
 
   void on_error(const error& reason) override {
     if (sink_) {
-      sink_->state().when_demand_changed = nullptr;
+      sink_->state().listener = nullptr;
       sink_->abort(reason);
-      sub_ = nullptr;
+      sub_.release_later();
     } else if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_error(reason);
+      out_.on_error(reason);
     }
   }
 
   void on_complete() override {
     if (sink_) {
-      sink_->state().when_demand_changed = nullptr;
+      sink_->state().listener = nullptr;
       sink_->close();
-      sub_ = nullptr;
+      sub_.release_later();
     } else if (out_) {
-      auto tmp = std::move(out_);
-      tmp.on_complete();
+      out_.on_complete();
     }
   }
+
+  // -- implementation of observable -------------------------------------------
 
   void on_subscribe(flow::subscription sub) override {
     if (!sub_ && out_) {
@@ -94,30 +113,14 @@ public:
         requested_prefix_ = true;
       }
     } else {
-      sub.dispose();
+      sub.cancel();
     }
   }
 
-  void dispose() override {
-    if (out_) {
-      out_ = nullptr;
-      if (sub_) {
-        auto tmp = std::move(sub_);
-        tmp.dispose();
-      }
-    }
-  }
+  // -- implementation of disposable -------------------------------------------
 
   bool disposed() const noexcept override {
     return !out_ && !sink_;
-  }
-
-  void ref_disposable() const noexcept override {
-    ref();
-  }
-
-  void deref_disposable() const noexcept override {
-    deref();
   }
 
   void request(size_t demand) override {
@@ -129,20 +132,13 @@ public:
     }
   }
 
-private:
-  intrusive_ptr<prefix_and_tail_sub> strong_this() {
-    return {this};
+  // -- implementation of ucast_sub_state_listener -----------------------------
+
+  void on_disposed(state_type*, bool from_external) override {
+    do_dispose(from_external);
   }
 
-  void set_callbacks() {
-    auto sptr = strong_this();
-    auto demand_cb = [sptr] { sptr->on_sink_demand_change(); };
-    sink_->state().when_demand_changed = make_action(std::move(demand_cb));
-    auto disposed_cb = [sptr] { sptr->on_sink_dispose(); };
-    sink_->state().when_disposed = make_action(std::move(disposed_cb));
-  }
-
-  void on_sink_demand_change() {
+  void on_demand_changed(state_type*) override {
     if (sink_ && sub_) {
       auto& st = sink_->state();
       auto pending = in_flight_ + st.buf.size();
@@ -154,16 +150,29 @@ private:
     }
   }
 
-  void on_sink_dispose() {
-    sink_ = nullptr;
-    if (sub_) {
-      auto tmp = std::move(sub_);
-      tmp.dispose();
+private:
+  // -- implementation of subscription::impl_base ------------------------------
+
+  void do_dispose(bool from_external) override {
+    if (disposed())
+      return;
+    sub_.cancel();
+    if (sink_) {
+      CAF_ASSERT(!out_); // Either in tail mode or in prefix mode.
+      sink_ = nullptr;
+      return;
     }
+    CAF_ASSERT(out_);
+    if (from_external)
+      out_.on_error(make_error(sec::disposed));
+    else
+      out_.release_later();
   }
 
+  // -- member variables -------------------------------------------------------
+
   /// Our scheduling context.
-  coordinator* ctx_;
+  coordinator* parent_;
 
   /// The observer for the initial prefix-and-tail tuple.
   observer<tuple_t> out_;
@@ -215,17 +224,20 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit prefix_and_tail(coordinator* ctx, observable<T> decorated,
+  explicit prefix_and_tail(coordinator* parent, observable<T> decorated,
                            size_t prefix_size)
-    : super(ctx), decorated_(std::move(decorated)), prefix_size_(prefix_size) {
+    : super(parent),
+      decorated_(std::move(decorated)),
+      prefix_size_(prefix_size) {
     // nop
   }
 
   disposable subscribe(observer<tuple_t> out) override {
     using impl_t = prefix_and_tail_sub<T>;
-    auto obs = make_counted<impl_t>(super::ctx(), out, prefix_size_);
-    decorated_.subscribe(observer<T>{obs});
+    auto obs = super::parent_->add_child(std::in_place_type<impl_t>, out,
+                                         prefix_size_);
     out.on_subscribe(subscription{obs});
+    decorated_.subscribe(observer<T>{obs});
     return obs->as_disposable();
   }
 

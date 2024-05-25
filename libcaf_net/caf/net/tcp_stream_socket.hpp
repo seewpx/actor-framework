@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include "caf/detail/net_export.hpp"
-#include "caf/ip_endpoint.hpp"
 #include "caf/net/socket.hpp"
 #include "caf/net/stream_socket.hpp"
+
+#include "caf/detail/net_export.hpp"
+#include "caf/ip_endpoint.hpp"
 #include "caf/timespan.hpp"
 #include "caf/uri.hpp"
 
@@ -62,6 +63,10 @@ make_connected_tcp_stream_socket(std::string host, uint16_t port,
 } // namespace caf::net
 
 namespace caf::detail {
+
+expected<net::tcp_stream_socket> CAF_NET_EXPORT //
+tcp_try_connect(const uri::authority_type& auth, timespan connection_timeout,
+                size_t max_retry_count, timespan retry_delay);
 
 expected<net::tcp_stream_socket> CAF_NET_EXPORT //
 tcp_try_connect(std::string host, uint16_t port, timespan connection_timeout,

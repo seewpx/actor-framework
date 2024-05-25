@@ -6,8 +6,11 @@
 
 #include "caf/actor_traits.hpp"
 #include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
+#include "caf/detail/to_statically_typed_trait.hpp"
+#include "caf/event_based_mail.hpp"
+#include "caf/extend.hpp"
 #include "caf/mixin/requester.hpp"
-#include "caf/mixin/sender.hpp"
 #include "caf/none.hpp"
 #include "caf/scheduled_actor.hpp"
 #include "caf/stream.hpp"
@@ -26,15 +29,20 @@ auto typed_actor_view_flow_access(caf::scheduled_actor* self) {
   return static_cast<Self>(self);
 }
 
+template <class...>
+class typed_actor_view;
+
 /// Decorates a pointer to a @ref scheduled_actor with a statically typed actor
 /// interface.
-template <class... Sigs>
-class typed_actor_view
-  : public extend<typed_actor_view_base, typed_actor_view<Sigs...>>::
-      template with<mixin::sender, mixin::requester> {
+template <class TraitOrSignature>
+class typed_actor_view<TraitOrSignature>
+  : public extend<typed_actor_view_base, typed_actor_view<TraitOrSignature>>::
+      template with<mixin::requester> {
 public:
+  using trait = detail::to_statically_typed_trait_t<TraitOrSignature>;
+
   /// Stores the template parameter pack.
-  using signatures = detail::type_list<Sigs...>;
+  using signatures = typename trait::signatures;
 
   using pointer = scheduled_actor*;
 
@@ -46,13 +54,13 @@ public:
 
   /// @copydoc local_actor::spawn
   template <class T, spawn_options Os = no_spawn_options, class... Ts>
-  typename infer_handle_from_class<T>::type spawn(Ts&&... xs) {
+  infer_handle_from_class_t<T> spawn(Ts&&... xs) {
     return self_->spawn<T, Os>(std::forward<Ts>(xs)...);
   }
 
   /// @copydoc local_actor::spawn
   template <spawn_options Os = no_spawn_options, class F, class... Ts>
-  typename infer_handle_from_fun<F>::type spawn(F fun, Ts&&... xs) {
+  infer_handle_from_fun_t<F> spawn(F fun, Ts&&... xs) {
     return self_->spawn<Os>(std::move(fun), std::forward<Ts>(xs)...);
   }
 
@@ -174,13 +182,13 @@ public:
 
   // -- linking and monitoring -------------------------------------------------
 
-  /// @copydoc monitorable_actor::link_to
+  /// @copydoc abstract_actor::link_to
   template <class ActorHandle>
   void link_to(const ActorHandle& x) {
     self_->link_to(x);
   }
 
-  /// @copydoc monitorable_actor::unlink_from
+  /// @copydoc abstract_actor::unlink_from
   template <class ActorHandle>
   void unlink_from(const ActorHandle& x) {
     self_->unlink_from(x);
@@ -206,6 +214,14 @@ public:
   template <class Handle>
   void demonitor(const Handle& whom) {
     self_->demonitor(whom);
+  }
+
+  // -- messaging --------------------------------------------------------------
+
+  /// Starts a new message.
+  template <class... Args>
+  auto mail(Args&&... args) {
+    return event_based_mail(trait{}, self_, std::forward<Args>(args)...);
   }
 
   // -- sending asynchronous messages ------------------------------------------
@@ -252,8 +268,7 @@ public:
   }
 
   template <class... Ts>
-  typename detail::make_response_promise_helper<Ts...>::type
-  make_response_promise() {
+  detail::make_response_promise_helper_t<Ts...> make_response_promise() {
     return self_->make_response_promise<Ts...>();
   }
 
@@ -269,18 +284,16 @@ public:
     return self_->make_response_promise();
   }
 
-  template <class... Ts>
-  void eq_impl(Ts&&... xs) {
-    self_->eq_impl(std::forward<Ts>(xs)...);
+  void add_awaited_response_handler(message_id response_id, behavior bhvr,
+                                    disposable pending_timeout = {}) {
+    return self_->add_awaited_response_handler(response_id, std::move(bhvr),
+                                               std::move(pending_timeout));
   }
 
-  void add_awaited_response_handler(message_id response_id, behavior bhvr) {
-    return self_->add_awaited_response_handler(response_id, std::move(bhvr));
-  }
-
-  void add_multiplexed_response_handler(message_id response_id, behavior bhvr) {
-    return self_->add_multiplexed_response_handler(response_id,
-                                                   std::move(bhvr));
+  void add_multiplexed_response_handler(message_id response_id, behavior bhvr,
+                                        disposable pending_timeout = {}) {
+    return self_->add_multiplexed_response_handler(response_id, std::move(bhvr),
+                                                   std::move(pending_timeout));
   }
 
   template <class Handle, class... Ts>
@@ -304,6 +317,11 @@ public:
     self_ = ptr;
   }
 
+  /// @private
+  bool enqueue(mailbox_element_ptr what, scheduler* sched) {
+    return self_->enqueue(std::move(what), sched);
+  }
+
   operator scheduled_actor*() const noexcept {
     return self_;
   }
@@ -318,68 +336,6 @@ public:
     //       *something* to pass to `typed_actor_view_flow_access`.
     auto self = typed_actor_view_flow_access<T>(self_);
     return self->make_observable();
-  }
-
-  /// @copydoc scheduled_actor::to_stream
-  template <class Observable>
-  auto to_stream(cow_string name, timespan max_delay,
-                 size_t max_items_per_batch, Observable&& obs) {
-    auto self = typed_actor_view_flow_access<Observable>(self_);
-    return self->to_stream(std::move(name), max_delay, max_items_per_batch,
-                           std::forward<Observable>(obs));
-  }
-
-  /// @copydoc scheduled_actor::to_stream
-  template <class Observable>
-  auto to_stream(std::string name, timespan max_delay,
-                 size_t max_items_per_batch, Observable&& obs) {
-    return to_stream(cow_string{std::move(name)}, max_delay,
-                     max_items_per_batch, std::forward<Observable>(obs));
-  }
-
-  /// Returns a function object for passing it to @c compose.
-  scheduled_actor::to_stream_t to_stream(cow_string name, timespan max_delay,
-                                         size_t max_items_per_batch) {
-    return {self_, std::move(name), max_delay, max_items_per_batch};
-  }
-
-  /// Returns a function object for passing it to @c compose.
-  scheduled_actor::to_stream_t to_stream(std::string name, timespan max_delay,
-                                         size_t max_items_per_batch) {
-    return to_stream(cow_string{std::move(name)}, max_delay,
-                     max_items_per_batch);
-  }
-
-  /// @copydoc scheduled_actor::to_typed_stream
-  template <class Observable>
-  auto to_typed_stream(cow_string name, timespan max_delay,
-                       size_t max_items_per_batch, Observable obs) {
-    auto self = typed_actor_view_flow_access<Observable>(self_);
-    return self->to_typed_stream(std::move(name), max_delay,
-                                 max_items_per_batch, std::move(obs));
-  }
-
-  /// @copydoc scheduled_actor::to_typed_stream
-  template <class Observable>
-  auto to_typed_stream(std::string name, timespan max_delay,
-                       size_t max_items_per_batch, Observable obs) {
-    return to_typed_stream(cow_string{std::move(name)}, max_delay,
-                           max_items_per_batch, std::move(obs));
-  }
-
-  /// Returns a function object for passing it to @c compose.
-  scheduled_actor::to_typed_stream_t
-  to_typed_stream(cow_string name, timespan max_delay,
-                  size_t max_items_per_batch) {
-    return {self_, std::move(name), max_delay, max_items_per_batch};
-  }
-
-  /// Returns a function object for passing it to @c compose.
-  scheduled_actor::to_typed_stream_t
-  to_typed_stream(std::string name, timespan max_delay,
-                  size_t max_items_per_batch) {
-    return to_typed_stream(cow_string{std::move(name)}, max_delay,
-                           max_items_per_batch);
   }
 
   /// @copydoc scheduled_actor::observe
@@ -405,6 +361,17 @@ public:
 
 private:
   scheduled_actor* self_;
+};
+
+/// Decorates a pointer to a @ref scheduled_actor with a statically typed actor
+/// interface.
+/// @note This is a specialization for backwards compatibility with pre v1.0
+///       releases. Please use the trait based implementation.
+template <class T1, class T2, class... Ts>
+class typed_actor_view<T1, T2, Ts...>
+  : public typed_actor_view<statically_typed<T1, T2, Ts...>> {
+  using super = typed_actor_view<statically_typed<T1, T2, Ts...>>;
+  using super::super;
 };
 
 template <class... Sigs>

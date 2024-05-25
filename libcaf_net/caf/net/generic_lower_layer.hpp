@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include "caf/net/fwd.hpp"
+
 #include "caf/detail/net_export.hpp"
 #include "caf/fwd.hpp"
-#include "caf/net/fwd.hpp"
 
 namespace caf::net {
 
@@ -17,7 +18,10 @@ public:
   virtual ~generic_lower_layer();
 
   /// Returns the @ref multiplexer instance that executes this protocol stack.
-  virtual multiplexer& mpx() noexcept = 0;
+  [[nodiscard]] multiplexer& mpx() noexcept;
+
+  /// Returns the manager that owns this layer.
+  [[nodiscard]] virtual socket_manager* manager() noexcept = 0;
 
   /// Queries whether the output device can accept more data straight away.
   [[nodiscard]] virtual bool can_send_more() const noexcept = 0;
@@ -34,8 +38,8 @@ public:
   /// flushed before closing the socket.
   virtual void shutdown() = 0;
 
-  /// Shuts down any connection or session du to an error. Any pending data gets
-  /// flushed before closing the socket. Protocols with a dedicated closing
+  /// Shuts down any connection or session due to an error. Any pending data
+  /// gets flushed before closing the socket. Protocols with a dedicated closing
   /// handshake such as WebSocket may send the close reason to the peer.
   virtual void shutdown(const error& reason);
 };

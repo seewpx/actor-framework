@@ -4,17 +4,18 @@
 
 #pragma once
 
-#include <vector>
-
-#include "caf/byte_buffer.hpp"
-#include "caf/detail/io_export.hpp"
 #include "caf/io/broker_servant.hpp"
 #include "caf/io/datagram_handle.hpp"
 #include "caf/io/network/datagram_manager.hpp"
 #include "caf/io/network/ip_endpoint.hpp"
 #include "caf/io/network/receive_buffer.hpp"
 #include "caf/io/system_messages.hpp"
+
+#include "caf/byte_buffer.hpp"
+#include "caf/detail/io_export.hpp"
 #include "caf/message.hpp"
+
+#include <vector>
 
 namespace caf::io {
 
@@ -58,10 +59,10 @@ public:
 
   virtual void remove_endpoint(datagram_handle hdl) = 0;
 
-  bool consume(execution_unit*, datagram_handle hdl,
+  bool consume(scheduler*, datagram_handle hdl,
                network::receive_buffer& buf) override;
 
-  void datagram_sent(execution_unit*, datagram_handle hdl, size_t,
+  void datagram_sent(scheduler*, datagram_handle hdl, size_t,
                      byte_buffer buffer) override;
 
   virtual void detach_handles() = 0;

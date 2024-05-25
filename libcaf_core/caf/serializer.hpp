@@ -4,6 +4,13 @@
 
 #pragma once
 
+#include "caf/detail/core_export.hpp"
+#include "caf/detail/squashed_int.hpp"
+#include "caf/fwd.hpp"
+#include "caf/save_inspector_base.hpp"
+#include "caf/sec.hpp"
+#include "caf/span.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -11,13 +18,6 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-
-#include "caf/detail/core_export.hpp"
-#include "caf/detail/squashed_int.hpp"
-#include "caf/fwd.hpp"
-#include "caf/save_inspector_base.hpp"
-#include "caf/sec.hpp"
-#include "caf/span.hpp"
 
 namespace caf {
 
@@ -31,15 +31,17 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  explicit serializer(actor_system& sys) noexcept;
+  serializer() noexcept = default;
 
-  explicit serializer(execution_unit* ctx = nullptr) noexcept;
+  explicit serializer(actor_system& sys) noexcept : context_(&sys) {
+    // nop
+  }
 
   virtual ~serializer();
 
   // -- properties -------------------------------------------------------------
 
-  auto context() const noexcept {
+  actor_system* context() const noexcept {
     return context_;
   }
 
@@ -134,7 +136,7 @@ public:
 
   /// @copydoc value
   template <class T>
-  std::enable_if_t<std::is_integral<T>::value, bool> value(T x) {
+  std::enable_if_t<std::is_integral_v<T>, bool> value(T x) {
     return value(static_cast<detail::squashed_int_t<T>>(x));
   }
 
@@ -170,7 +172,7 @@ public:
 
 protected:
   /// Provides access to the ::proxy_registry and to the ::actor_system.
-  execution_unit* context_;
+  actor_system* context_ = nullptr;
 
   /// Configures whether client code should assume human-readable output.
   bool has_human_readable_format_ = false;

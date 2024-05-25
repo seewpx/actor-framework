@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <algorithm>
-#include <cstdint>
-
 #include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/detail/network_order.hpp"
 #include "caf/detail/parser/add_ascii.hpp"
 #include "caf/detail/parser/chars.hpp"
@@ -18,6 +16,9 @@
 #include "caf/ipv4_address.hpp"
 #include "caf/ipv6_address.hpp"
 #include "caf/pec.hpp"
+
+#include <algorithm>
+#include <cstdint>
 
 CAF_PUSH_UNUSED_LABEL_WARNING
 
@@ -49,11 +50,6 @@ void read_ipv6_h16(State& ps, Consumer& consumer) {
     ++digits;
     return add_ascii<16>(res, c);
   };
-  // Computes the result on success.
-  auto g = caf::detail::make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character)
-      consumer.value(res);
-  });
   // clang-format off
   start();
   state(init) {
@@ -65,6 +61,8 @@ void read_ipv6_h16(State& ps, Consumer& consumer) {
   }
   fin();
   // clang-format on
+  if (ps.code <= pec::trailing_character)
+    consumer.value(res);
 }
 
 /// Reads 16 (hex) or 32 (IPv4 notation) bits of an IPv6 address.
@@ -100,16 +98,6 @@ void read_ipv6_h16_or_l32(State& ps, Consumer& consumer) {
     dec_res = 0;
     digits = 0;
   };
-  // Computes the result on success. Note, when reading octets, this will give
-  // the consumer the final byte. Previous bytes were signaled during parsing.
-  auto g = caf::detail::make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character) {
-      if (mode != v4_octets)
-        consumer.value(hex_res);
-      else
-        fin_octet();
-    }
-  });
   // clang-format off
   start();
   state(init) {
@@ -133,6 +121,14 @@ void read_ipv6_h16_or_l32(State& ps, Consumer& consumer) {
   }
   fin();
   // clang-format on
+  // When reading octets, pass the final byte to the consumer. Previous bytes
+  // were signaled during parsing.
+  if (ps.code <= pec::trailing_character) {
+    if (mode != v4_octets)
+      consumer.value(hex_res);
+    else
+      fin_octet();
+  }
 }
 
 template <class F>
@@ -172,16 +168,6 @@ void read_ipv6_address(State& ps, Consumer&& consumer) {
   // Keeps track of all bytes consumed so far, suffix and prefix combined.
   size_t filled_bytes = 0;
   auto remaining_bytes = [&] { return ipv6_address::num_bytes - filled_bytes; };
-  // Computes the result on success.
-  auto g = caf::detail::make_scope_guard([&] {
-    if (ps.code <= pec::trailing_character) {
-      ipv6_address result;
-      auto& bytes = result.bytes();
-      for (size_t i = 0; i < ipv6_address::num_bytes; ++i)
-        bytes[i] = prefix[i] | suffix[i];
-      consumer.value(std::move(result));
-    }
-  });
   // We need to parse 2-byte hexadecimal numbers (x) and also keep track of
   // the current writing position when reading the prefix.
   auto read_prefix = [&](uint8_t* bytes, size_t count) {
@@ -279,6 +265,13 @@ void read_ipv6_address(State& ps, Consumer&& consumer) {
   }
   fin();
   // clang-format on
+  if (ps.code > pec::trailing_character)
+    return;
+  ipv6_address result;
+  auto& bytes = result.bytes();
+  for (size_t i = 0; i < ipv6_address::num_bytes; ++i)
+    bytes[i] = prefix[i] | suffix[i];
+  consumer.value(std::move(result));
 }
 
 } // namespace caf::detail::parser

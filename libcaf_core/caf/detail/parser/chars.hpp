@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <cstring>
-
 #include "caf/config.hpp"
 #include "caf/detail/core_export.hpp"
+
+#include <cstring>
 
 namespace caf::detail::parser {
 
@@ -34,6 +34,8 @@ inline bool in_whitelist(const char* whitelist, char ch) noexcept {
 inline bool in_whitelist(bool (*filter)(char), char ch) noexcept {
   return filter(ch);
 }
+
+CAF_CORE_EXPORT extern const char whitespace_chars[7];
 
 CAF_CORE_EXPORT extern const char alphanumeric_chars[63];
 

@@ -4,11 +4,6 @@
 
 #pragma once
 
-#include <optional>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-
 #include "caf/const_typed_message_view.hpp"
 #include "caf/detail/apply_args.hpp"
 #include "caf/detail/core_export.hpp"
@@ -26,6 +21,11 @@
 #include "caf/timespan.hpp"
 #include "caf/typed_message_view.hpp"
 #include "caf/typed_response_promise.hpp"
+
+#include <optional>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 
 namespace caf {
 
@@ -73,10 +73,9 @@ struct with_generic_timeout<false, std::tuple<Ts...>> {
 
 template <class... Ts>
 struct with_generic_timeout<true, std::tuple<Ts...>> {
-  using type =
-    typename tl_apply<typename tl_replace_back<
-                        type_list<Ts...>, generic_timeout_definition>::type,
-                      std::tuple>::type;
+  using type = tl_apply_t<
+    tl_replace_back_t<type_list<Ts...>, generic_timeout_definition>,
+    std::tuple>;
 };
 
 struct dummy_timeout_definition {
@@ -115,17 +114,47 @@ public:
     [[maybe_unused]] auto dispatch = [&](auto& fun) {
       using fun_type = std::decay_t<decltype(fun)>;
       using trait = get_callable_trait_t<fun_type>;
-      auto arg_types = to_type_id_list<typename trait::decayed_arg_types>();
-      if (arg_types == msg.types()) {
-        typename trait::message_view_type xs{msg};
-        using fun_result = decltype(detail::apply_args(fun, xs));
-        if constexpr (std::is_same<void, fun_result>::value) {
-          detail::apply_args(fun, xs);
+      using fn_args = typename trait::arg_types;
+      using decayed_args = typename trait::decayed_arg_types;
+      if constexpr (std::is_same_v<decayed_args, type_list<message>>) {
+        using fun_result = decltype(fun(msg));
+        if constexpr (std::is_same_v<void, fun_result>) {
+          fun(msg);
           f(unit);
         } else {
-          auto invoke_res = detail::apply_args(fun, xs);
+          auto invoke_res = fun(msg);
           f(invoke_res);
         }
+        return true;
+      } else {
+        using detail::apply_args_auto_move;
+        auto arg_types = to_type_id_list<decayed_args>();
+        if (arg_types != msg.types())
+          return false;
+        auto do_invoke = [&](auto& xs) {
+          using fun_result = decltype(detail::apply_args(fun, xs));
+          auto token = detail::get_indices(xs);
+          if constexpr (std::is_same_v<void, fun_result>) {
+            apply_args_auto_move(fun, fn_args{}, token, xs);
+            f(unit);
+          } else {
+            auto invoke_res = apply_args_auto_move(fun, fn_args{}, token, xs);
+            f(invoke_res);
+          }
+        };
+        using view_type = typename trait::message_view_type;
+        // If we have the only reference to a message, we can safely modify it
+        // in place, i.e., use the mutable view type and move values from the
+        // message to the function arguments.
+        if constexpr (view_type::is_const) {
+          if (msg.unique()) {
+            typename trait::mutable_message_view_type xs{msg};
+            do_invoke(xs);
+            return true;
+          }
+        }
+        view_type xs{msg};
+        do_invoke(xs);
         return true;
       }
       return false;

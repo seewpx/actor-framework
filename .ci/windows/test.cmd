@@ -1,4 +1,2 @@
-call "c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
-
-cd build
-ctest --output-on-failure -C debug || exit \b 1
+set PATH=%cd%\bin\Debug;%PATH%
+ctest.exe --output-on-failure -C debug --test-dir build || exit \b 1

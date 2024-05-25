@@ -1,11 +1,43 @@
-cmake_minimum_required(VERSION 3.5...3.18 FATAL_ERROR)
-project(CAF CXX)
+cmake_minimum_required(VERSION 3.13..3.27 FATAL_ERROR)
+project(CAF VERSION 1.0.0 LANGUAGES CXX)
+
+# -- version boilerplate -------------------------------------------------------
+
+# Individual components of the version number.
+set(CAF_VERSION_MAJOR ${PROJECT_VERSION_MAJOR}
+    CACHE INTERNAL "The major version of CAF" FORCE)
+set(CAF_VERSION_MINOR ${PROJECT_VERSION_MINOR}
+    CACHE INTERNAL "The minor version of CAF" FORCE)
+set(CAF_VERSION_PATCH ${PROJECT_VERSION_PATCH}
+    CACHE INTERNAL "The patch version of CAF" FORCE)
+
+# The full version number as human-readable string.
+set(CAF_VERSION "${CAF_VERSION_MAJOR}.${CAF_VERSION_MINOR}.${CAF_VERSION_PATCH}"
+    CACHE INTERNAL "The full CAF version string" FORCE)
+
+# The full version number as integer.
+if(CAF_VERSION_MAJOR LESS 1)
+  set(CAF_VERSION_INT ${CAF_VERSION_MAJOR})
+else()
+  set(CAF_VERSION_INT "")
+endif()
+if(CAF_VERSION_MINOR LESS 10)
+  set(CAF_VERSION_INT ${CAF_VERSION_INT}0${CAF_VERSION_MINOR})
+else()
+  set(CAF_VERSION_INT ${CAF_VERSION_INT}${CAF_VERSION_MINOR})
+endif()
+if(CAF_VERSION_PATCH LESS 10)
+  set(CAF_VERSION_INT ${CAF_VERSION_INT}0${CAF_VERSION_PATCH})
+else()
+  set(CAF_VERSION_INT ${CAF_VERSION_INT}${CAF_VERSION_PATCH})
+endif()
 
 # -- includes ------------------------------------------------------------------
 
 include(CMakeDependentOption)
 include(CMakePackageConfigHelpers)
 include(CheckCXXSourceCompiles)
+include(CheckCXXSourceRuns)
 include(GNUInstallDirs)
 include(GenerateExportHeader)
 
@@ -21,7 +53,6 @@ option(THREADS_PREFER_PTHREAD_FLAG "Prefer -pthread flag if available " ON)
 
 # -- CAF options that are off by default ---------------------------------------
 
-option(CAF_ENABLE_ACTOR_PROFILER "Enable experimental profiler API" OFF)
 option(CAF_ENABLE_CPACK "Enable packaging via CPack" OFF)
 option(CAF_ENABLE_CURL_EXAMPLES "Build examples with libcurl" OFF)
 option(CAF_ENABLE_PROTOBUF_EXAMPLES "Build examples with Google Protobuf" OFF)
@@ -36,7 +67,6 @@ option(CAF_ENABLE_EXCEPTIONS "Build CAF with support for exceptions" ON)
 option(CAF_ENABLE_IO_MODULE "Build legacy networking I/O module" ON)
 option(CAF_ENABLE_NET_MODULE "Build networking I/O module" ON)
 option(CAF_ENABLE_TESTING "Build unit test suites" ON)
-option(CAF_ENABLE_TOOLS "Build utility programs such as caf-run" ON)
 
 # -- CAF options that depend on others -----------------------------------------
 
@@ -45,6 +75,7 @@ cmake_dependent_option(CAF_ENABLE_OPENSSL_MODULE "Build OpenSSL module" ON
 
 # -- CAF options with non-boolean values ---------------------------------------
 
+set(CAF_CXX_VERSION 17 CACHE STRING "Set the C++ version to use for CAF")
 set(CAF_LOG_LEVEL "QUIET" CACHE STRING "Set log verbosity of CAF components")
 set(CAF_EXCLUDE_TESTS "" CACHE STRING "List of excluded test suites")
 set(CAF_SANITIZERS "" CACHE STRING
@@ -92,7 +123,9 @@ endif()
 # their own CMake scaffold (e.g., via FetchContent) may pass this target in with
 # some properties predefined in order to force compiler flags or dependencies.
 if(NOT TARGET caf_internal)
+  message(STATUS "Build CAF with C++${CAF_CXX_VERSION}")
   add_library(caf_internal INTERFACE)
+  target_compile_features(caf_internal INTERFACE cxx_std_${CAF_CXX_VERSION})
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
@@ -108,53 +141,27 @@ elseif(MSVC)
   target_compile_options(caf_internal INTERFACE /EHsc)
 endif()
 
-# -- unit testing setup / caf_add_test_suites function  ------------------------
+# -- unit testing setup --------------------------------------------------------
 
 if(CAF_ENABLE_TESTING)
   enable_testing()
-  function(caf_add_test_suites target)
-    foreach(suiteName ${ARGN})
-      if(NOT ${suiteName} IN_LIST CAF_EXCLUDE_TESTS)
-        string(REPLACE "." "/" suitePath ${suiteName})
-        target_sources(${target} PRIVATE
-          "${CMAKE_CURRENT_SOURCE_DIR}/test/${suitePath}.cpp")
-        add_test(NAME ${suiteName}
-                 COMMAND ${target} -r300 -n -v5 -s "^${suiteName}$")
-      endif()
-    endforeach()
-  endfunction()
 endif()
 
-# -- make sure we have at least C++17 available --------------------------------
+# -- check whether we can use std::format --------------------------------------
 
-# TODO: simply set CXX_STANDARD when switching to CMake ≥ 3.9.6
-if(NOT CMAKE_CROSSCOMPILING)
-  try_compile(caf_has_cxx_17
-              "${CMAKE_CURRENT_BINARY_DIR}"
-              "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-compiler-features.cpp")
-  if(NOT caf_has_cxx_17)
-    if(MSVC)
-      set(cxx_flag "/std:c++17")
+if(NOT DEFINED CAF_USE_STD_FORMAT)
+  set(CAF_USE_STD_FORMAT OFF CACHE BOOL "Enable std::format support" FORCE)
+  if(NOT CMAKE_CROSSCOMPILING)
+    set(snippet "#include <format>
+                 #include <iostream>
+                 int main() { std::cout << std::format(\"{}\", \"ok\"); }")
+    check_cxx_source_runs("${snippet}" snippet_output)
+    if("${snippet_output}" STREQUAL "ok")
+      message(STATUS "Enable std::format support")
+      set(CAF_USE_STD_FORMAT ON CACHE BOOL "Enable std::format support" FORCE)
     else()
-      if(CMAKE_CXX_COMPILER_ID MATCHES "Clang"
-         AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5)
-        set(cxx_flag "-std=c++1z")
-      else()
-        set(cxx_flag "-std=c++17")
-      endif()
+      message(STATUS "Disable std::format support: NOT available")
     endif()
-    # Re-run compiler check.
-    try_compile(caf_has_cxx_17
-                "${CMAKE_CURRENT_BINARY_DIR}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-compiler-features.cpp"
-                COMPILE_DEFINITIONS "${cxx_flag}"
-                OUTPUT_VARIABLE cxx_check_output)
-    if(NOT caf_has_cxx_17)
-      message(FATAL_ERROR "\nFatal error: unable activate C++17 mode!\
-                           \nPlease see README.md for supported compilers.\
-                           \n\ntry_compile output:\n${cxx_check_output}")
-    endif()
-    target_compile_options(caf_internal INTERFACE "${cxx_flag}")
   endif()
 endif()
 
@@ -166,47 +173,9 @@ add_library(CAF::internal ALIAS caf_internal)
 
 install(TARGETS caf_internal EXPORT CAFTargets)
 
-# -- get CAF version -----------------------------------------------------------
+# -- create the libcaf_test target ahead of time for caf_core ------------------
 
-# Get line containing the version from config.hpp and extract version number.
-file(READ "libcaf_core/caf/config.hpp" CAF_CONFIG_HPP)
-string(REGEX MATCH "#define CAF_VERSION [0-9]+" CAF_VERSION_LINE "${CAF_CONFIG_HPP}")
-string(REGEX MATCH "[0-9]+" CAF_VERSION_INT "${CAF_VERSION_LINE}")
-# Calculate major, minor, and patch version.
-math(EXPR CAF_VERSION_MAJOR "${CAF_VERSION_INT} / 10000")
-math(EXPR CAF_VERSION_MINOR "( ${CAF_VERSION_INT} / 100) % 100")
-math(EXPR CAF_VERSION_PATCH "${CAF_VERSION_INT} % 100")
-# Create full version string.
-set(CAF_VERSION "${CAF_VERSION_MAJOR}.${CAF_VERSION_MINOR}.${CAF_VERSION_PATCH}"
-  CACHE INTERNAL "The full CAF version string")
-# Set the library version for our shared library targets.
-if(CMAKE_HOST_SYSTEM_NAME MATCHES "OpenBSD")
-  set(CAF_LIB_VERSION "${CAF_VERSION_MAJOR}.${CAF_VERSION_MINOR}"
-      CACHE INTERNAL "The version string used for shared library objects")
-else()
-  set(CAF_LIB_VERSION "${CAF_VERSION}"
-      CACHE INTERNAL "The version string used for shared library objects")
-endif()
-
-# -- install testing DSL headers -----------------------------------------------
-
-add_library(libcaf_test INTERFACE)
-
-set_target_properties(libcaf_test PROPERTIES EXPORT_NAME test)
-
-target_include_directories(libcaf_test INTERFACE
-  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/libcaf_test>)
-
-add_library(CAF::test ALIAS libcaf_test)
-
-install(DIRECTORY libcaf_test/caf/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/caf
-        FILES_MATCHING PATTERN "*.hpp")
-
-install(TARGETS libcaf_test
-        EXPORT CAFTargets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT test
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT test
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT test)
+add_library(libcaf_test)
 
 # -- add uninstall target if it does not exist yet -----------------------------
 
@@ -240,10 +209,6 @@ endfunction()
 function(caf_export_and_install_lib component)
   add_library(CAF::${component} ALIAS libcaf_${component})
   string(TOUPPER "CAF_${component}_EXPORT" export_macro_name)
-  target_include_directories(libcaf_${component} INTERFACE
-                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-                             $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-                             $<INSTALL_INTERFACE:include>)
   generate_export_header(
     libcaf_${component}
     EXPORT_MACRO_NAME ${export_macro_name}
@@ -251,7 +216,7 @@ function(caf_export_and_install_lib component)
   set_target_properties(libcaf_${component} PROPERTIES
                         EXPORT_NAME ${component}
                         SOVERSION ${CAF_VERSION}
-                        VERSION ${CAF_LIB_VERSION}
+                        VERSION ${CAF_VERSION_MAJOR}
                         OUTPUT_NAME caf_${component})
   install(TARGETS libcaf_${component}
           EXPORT CAFTargets
@@ -261,40 +226,22 @@ function(caf_export_and_install_lib component)
   install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/caf"
           DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
           COMPONENT ${component}
-          FILES_MATCHING PATTERN "*.hpp")
+          FILES_MATCHING PATTERN "*.hpp"
+          PATTERN "*/internal/*" EXCLUDE)
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/caf/detail/${component}_export.hpp"
           DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/caf/detail/")
 endfunction()
 
-# TODO: remove when switching to CMake > 3.12
-function(caf_target_link_libraries target)
-  if(CMAKE_VERSION VERSION_LESS 3.12)
-    get_target_property(target_type ${target} TYPE)
-    if (NOT target_type STREQUAL OBJECT_LIBRARY)
-      target_link_libraries(${target} ${ARGN})
-    else()
-      cmake_parse_arguments(CAF_TARGET_LINK_LIBRARIES "" ""
-                            "PUBLIC;PRIVATE;INTERFACE" ${ARGN})
-      # If we can't link against it, at least make sure to pull in include paths
-      # and compiler options.
-      foreach(arg IN LISTS CAF_TARGET_LINK_LIBRARIES_PUBLIC
-                           CAF_TARGET_LINK_LIBRARIES_PRIVATE)
-        if (TARGET ${arg})
-          target_include_directories(
-            ${target} PRIVATE
-            $<TARGET_PROPERTY:${arg},INTERFACE_INCLUDE_DIRECTORIES>)
-          target_compile_options(
-            ${target} PRIVATE
-            $<TARGET_PROPERTY:${arg},INTERFACE_COMPILE_OPTIONS>)
-        endif()
-      endforeach()
-    endif()
-  else()
-    target_link_libraries(${target} ${ARGN})
-  endif()
-endfunction()
-
 # -- convenience function for automating our component setup -------------------
+
+function(caf_add_log_component name)
+  set(CAF_COMPONENT_NAME ${name})
+  configure_file("${PROJECT_SOURCE_DIR}/cmake/log.hpp.in"
+                 "${CMAKE_CURRENT_BINARY_DIR}/caf/log/${name}.hpp"
+                 @ONLY)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/caf/log/${name}.hpp"
+          DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/caf/log/")
+endfunction()
 
 # Usage:
 # caf_add_component(
@@ -310,13 +257,9 @@ endfunction()
 #     ...
 #   SOURCES
 #     ...
-#   TEST_SOURCES
-#     ...
-#   TEST_SUITES
-#     ...
 # )
 function(caf_add_component name)
-  set(varargs DEPENDENCIES HEADERS SOURCES TEST_SOURCES TEST_SUITES ENUM_TYPES)
+  set(varargs DEPENDENCIES HEADERS SOURCES ENUM_TYPES)
   cmake_parse_arguments(CAF_ADD_COMPONENT "" "" "${varargs}" ${ARGN})
   if(NOT CAF_ADD_COMPONENT_HEADERS)
     message(FATAL_ERROR "Cannot add CAF component without at least one header.")
@@ -329,58 +272,96 @@ function(caf_add_component name)
       message(FATAL_ERROR "caf_add_component(): missing parameter ${param}")
     endif()
   endforeach()
-  set(pub_lib_target "libcaf_${name}")
-  set(obj_lib_target "libcaf_${name}_obj")
-  set(targets ${pub_lib_target} ${obj_lib_target})
-  add_library(${obj_lib_target} OBJECT
-              ${CAF_ADD_COMPONENT_HEADERS} ${CAF_ADD_COMPONENT_SOURCES})
-  set_property(TARGET ${obj_lib_target} PROPERTY POSITION_INDEPENDENT_CODE ON)
-  caf_target_link_libraries(${obj_lib_target}
-                            ${CAF_ADD_COMPONENT_DEPENDENCIES})
-  add_library(${pub_lib_target}
-              "${PROJECT_SOURCE_DIR}/cmake/dummy.cpp"
-              $<TARGET_OBJECTS:${obj_lib_target}>)
-  if(CAF_ENABLE_TESTING AND CAF_ADD_COMPONENT_TEST_SOURCES)
-    set(tst_bin_target "caf-${name}-test")
-    list(APPEND targets ${tst_bin_target})
-    add_executable(${tst_bin_target}
-                   ${CAF_ADD_COMPONENT_TEST_SOURCES}
-                   $<TARGET_OBJECTS:${obj_lib_target}>)
-    target_link_libraries(${tst_bin_target} PRIVATE CAF::test
-                          ${CAF_ADD_COMPONENT_DEPENDENCIES})
-    target_include_directories(${tst_bin_target} PRIVATE
-                               "${CMAKE_CURRENT_SOURCE_DIR}/test")
-    if(CAF_ADD_COMPONENT_TEST_SUITES)
-      caf_add_test_suites(${tst_bin_target} ${CAF_ADD_COMPONENT_TEST_SUITES})
-    endif()
+  set(lib_target "libcaf_${name}")
+  if(NOT TARGET ${lib_target})
+    add_library(${lib_target} "${PROJECT_SOURCE_DIR}/cmake/dummy.cpp")
   endif()
-  target_link_libraries(${pub_lib_target} ${CAF_ADD_COMPONENT_DEPENDENCIES})
-  if(CAF_ADD_COMPONENT_ENUM_TYPES)
-    foreach(enum_name ${CAF_ADD_COMPONENT_ENUM_TYPES})
-      if(obj_lib_target)
-        caf_add_enum_type(${obj_lib_target} ${enum_name})
-      else()
-        caf_add_enum_type(${pub_lib_target} ${enum_name})
-      endif()
-    endforeach()
+  set_property(TARGET ${lib_target} PROPERTY POSITION_INDEPENDENT_CODE ON)
+  target_link_libraries(${lib_target} ${CAF_ADD_COMPONENT_DEPENDENCIES})
+  target_compile_definitions(${lib_target} PRIVATE "libcaf_${name}_EXPORTS")
+  target_include_directories(${lib_target} PUBLIC
+                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+                             $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+                             $<INSTALL_INTERFACE:include>)
+  caf_add_log_component(${name})
+  if(BUILD_SHARED_LIBS)
+    set_target_properties(${lib_target} PROPERTIES
+                          CXX_VISIBILITY_PRESET hidden
+                          VISIBILITY_INLINES_HIDDEN ON)
   endif()
-  foreach(target ${targets})
-    target_compile_definitions(${target} PRIVATE "libcaf_${name}_EXPORTS")
-    target_include_directories(${target} PRIVATE
-                               "${CMAKE_CURRENT_SOURCE_DIR}"
-                               "${CMAKE_CURRENT_BINARY_DIR}")
-    if(BUILD_SHARED_LIBS)
-      set_target_properties(${target} PROPERTIES
-                            CXX_VISIBILITY_PRESET hidden
-                            VISIBILITY_INLINES_HIDDEN ON)
+  if(CAF_ENABLE_TESTING)
+    add_executable("caf-${name}-test" ${CMAKE_CURRENT_SOURCE_DIR}/main.test.cpp)
+    target_compile_definitions(
+      "caf-${name}-test" PRIVATE
+      CAF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    target_link_libraries("caf-${name}-test" PRIVATE libcaf_test
+                          ${CAF_ADD_COMPONENT_DEPENDENCIES} ${lib_target})
+  endif()
+  foreach(source_file ${CAF_ADD_COMPONENT_SOURCES})
+    get_filename_component(ext ${source_file} EXT)
+    if(ext STREQUAL ".cpp")
+      target_sources(${lib_target} PRIVATE ${source_file})
+    elseif(ext STREQUAL ".test.cpp" AND CAF_ENABLE_TESTING)
+      get_filename_component(test_name ${source_file} NAME_WE)
+      get_filename_component(test_path ${source_file} DIRECTORY)
+      string(REPLACE "/" "." test_name "${test_path}/${test_name}")
+      target_sources("caf-${name}-test" PRIVATE ${source_file})
+      set_property(SOURCE ${source_file} PROPERTY COMPILE_DEFINITIONS
+                   CAF_TEST_SUITE_NAME=${test_name})
+      add_test(NAME ${test_name} COMMAND "caf-${name}-test" -s "^${test_name}$" -n -v5)
+      set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endif()
   endforeach()
+  target_link_libraries(${lib_target} ${CAF_ADD_COMPONENT_DEPENDENCIES})
+  if(CAF_ADD_COMPONENT_ENUM_TYPES)
+    # OBJECT lib: workaround for https://gitlab.kitware.com/cmake/cmake/-/issues/18399
+    add_library(${name}_enums OBJECT)
+    set_property(TARGET ${name}_enums PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(${name}_enums CAF::internal)
+    if(NOT name STREQUAL core)
+      # Implementations need access to headers such as config.hpp.
+      target_link_libraries(${name}_enums CAF::core)
+    endif()
+    target_include_directories(${name}_enums PRIVATE
+                               ${CMAKE_CURRENT_SOURCE_DIR}
+                               ${CMAKE_CURRENT_BINARY_DIR})
+    foreach(enum_name ${CAF_ADD_COMPONENT_ENUM_TYPES})
+      caf_add_enum_type(${name}_enums ${enum_name})
+    endforeach()
+    target_sources(${lib_target} PRIVATE $<TARGET_OBJECTS:${name}_enums>)
+    target_compile_definitions(${name}_enums PRIVATE libcaf_${name}_EXPORTS)
+  endif()
   caf_export_and_install_lib(${name})
+endfunction()
+
+# -- convenience function for adding executable targets of tests ---------------
+
+# Usage:
+# caf_add_test_executable(
+#   foo
+#   DEPENDENCIES
+#     ...
+#   SOURCES
+#     ...
+# )
+function(caf_add_test_executable name)
+  if(NOT CAF_ENABLE_TESTING)
+    return()
+  endif()
+  set(varargs DEPENDENCIES SOURCES)
+  cmake_parse_arguments(args "" "" "${varargs}" ${ARGN})
+  if(NOT args_SOURCES)
+    message(FATAL_ERROR "Cannot add a CAF test executable without sources.")
+  endif()
+  add_executable(${name} ${args_SOURCES})
+  target_link_libraries(${name} PRIVATE CAF::internal ${args_DEPENDENCIES})
 endfunction()
 
 # -- build all components the user asked for -----------------------------------
 
 add_subdirectory(libcaf_core)
+
+add_subdirectory(libcaf_test)
 
 if(CAF_ENABLE_NET_MODULE)
   add_subdirectory(libcaf_net)
@@ -396,10 +377,6 @@ endif()
 
 if(CAF_ENABLE_EXAMPLES)
   add_subdirectory(examples)
-endif()
-
-if(CAF_ENABLE_TOOLS)
-  add_subdirectory(tools)
 endif()
 
 # -- optionally add the Robot tests to CTest -----------------------------------
@@ -445,7 +422,7 @@ install(EXPORT CAFTargets
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/CAFConfigVersion.cmake"
   VERSION ${CAF_VERSION}
-  COMPATIBILITY ExactVersion)
+  COMPATIBILITY SameMajorVersion)
 
 configure_package_config_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CAFConfig.cmake.in"

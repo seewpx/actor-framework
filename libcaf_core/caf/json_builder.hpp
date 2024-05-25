@@ -13,7 +13,7 @@
 namespace caf {
 
 /// Serializes an inspectable object to a @ref json_value.
-class json_builder : public serializer {
+class CAF_CORE_EXPORT json_builder : public serializer {
 public:
   // -- member types -----------------------------------------------------------
 
@@ -23,11 +23,13 @@ public:
 
   // -- constructors, destructors, and assignment operators --------------------
 
-  json_builder();
+  json_builder() {
+    init();
+  }
 
-  explicit json_builder(actor_system& sys);
-
-  explicit json_builder(execution_unit* ctx);
+  explicit json_builder(actor_system& sys) : super(sys) {
+    init();
+  }
 
   json_builder(const json_builder&) = delete;
 

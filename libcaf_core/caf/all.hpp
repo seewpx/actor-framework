@@ -4,14 +4,11 @@
 
 #pragma once
 
-#include "caf/config.hpp"
-
 #include "caf/abstract_actor.hpp"
-#include "caf/abstract_channel.hpp"
-#include "caf/abstract_group.hpp"
 #include "caf/actor.hpp"
 #include "caf/actor_addr.hpp"
 #include "caf/actor_clock.hpp"
+#include "caf/actor_from_state.hpp"
 #include "caf/actor_ostream.hpp"
 #include "caf/actor_pool.hpp"
 #include "caf/actor_proxy.hpp"
@@ -19,16 +16,16 @@
 #include "caf/actor_system_config.hpp"
 #include "caf/actor_traits.hpp"
 #include "caf/after.hpp"
+#include "caf/anon_mail.hpp"
 #include "caf/attachable.hpp"
 #include "caf/behavior.hpp"
-#include "caf/behavior_policy.hpp"
 #include "caf/binary_deserializer.hpp"
 #include "caf/binary_serializer.hpp"
 #include "caf/blocking_actor.hpp"
-#include "caf/byte.hpp"
 #include "caf/byte_buffer.hpp"
 #include "caf/byte_span.hpp"
 #include "caf/caf_main.hpp"
+#include "caf/config.hpp"
 #include "caf/config_option.hpp"
 #include "caf/config_option_adder.hpp"
 #include "caf/config_value.hpp"
@@ -41,14 +38,13 @@
 #include "caf/error.hpp"
 #include "caf/event_based_actor.hpp"
 #include "caf/exec_main.hpp"
-#include "caf/execution_unit.hpp"
 #include "caf/exit_reason.hpp"
 #include "caf/expected.hpp"
 #include "caf/extend.hpp"
 #include "caf/function_view.hpp"
-#include "caf/group.hpp"
 #include "caf/hash/fnv.hpp"
 #include "caf/init_global_meta_objects.hpp"
+#include "caf/keep_behavior.hpp"
 #include "caf/local_actor.hpp"
 #include "caf/logger.hpp"
 #include "caf/make_config_option.hpp"
@@ -60,30 +56,24 @@
 #include "caf/message_priority.hpp"
 #include "caf/mtl.hpp"
 #include "caf/node_id.hpp"
-#include "caf/optional.hpp"
 #include "caf/others.hpp"
 #include "caf/proxy_registry.hpp"
 #include "caf/raise_error.hpp"
 #include "caf/ref_counted.hpp"
-#include "caf/replies_to.hpp"
 #include "caf/response_handle.hpp"
 #include "caf/result.hpp"
 #include "caf/resumable.hpp"
+#include "caf/scheduler.hpp"
 #include "caf/scoped_actor.hpp"
-#include "caf/scoped_execution_unit.hpp"
 #include "caf/sec.hpp"
-#include "caf/send.hpp"
 #include "caf/serializer.hpp"
 #include "caf/skip.hpp"
 #include "caf/spawn_options.hpp"
 #include "caf/stateful_actor.hpp"
-#include "caf/string_view.hpp"
 #include "caf/system_messages.hpp"
 #include "caf/term.hpp"
 #include "caf/thread_hook.hpp"
 #include "caf/timeout_definition.hpp"
-#include "caf/tracing_data.hpp"
-#include "caf/tracing_data_factory.hpp"
 #include "caf/type_id.hpp"
 #include "caf/typed_actor.hpp"
 #include "caf/typed_actor_pointer.hpp"
@@ -94,11 +84,6 @@
 #include "caf/typed_response_promise.hpp"
 #include "caf/unit.hpp"
 #include "caf/uuid.hpp"
-
-#include "caf/decorator/sequencer.hpp"
-
-#include "caf/scheduler/abstract_coordinator.hpp"
-#include "caf/scheduler/test_coordinator.hpp"
 
 ///
 /// @mainpage CAF
@@ -211,13 +196,13 @@
 /// using result_atom = atom_constant<atom("result")>;
 ///
 /// // send a message to a1
-/// self->send(a1, hello_atom::value, "hello a1!");
+/// self->mail(hello_atom::value, "hello a1!").send(a1);
 ///
 /// // send a message to a1, a2, and a3
 /// auto msg = make_message(compute_atom::value, 1, 2, 3);
-/// self->send(a1, msg);
-/// self->send(a2, msg);
-/// self->send(a3, msg);
+/// self->mail(msg).send(a1);
+/// self->mail(msg).send(a2);
+/// self->mail(msg).send(a3);
 /// ~~
 ///
 /// @section Receive Receive messages
@@ -335,14 +320,14 @@
 /// ~~
 /// scoped_actor self{...};
 ///
-/// self->delayed_send(self, std::chrono::seconds(1), poll_atom::value);
+/// self->mail(poll_atom::value).delay(std::chrono::seconds(1)).send(self);
 /// bool running = true;
 /// self->receive_while([&](){ return running; }) (
 ///   // ...
 ///   [&](poll_atom) {
 ///     // ... poll something ...
 ///     // and do it again after 1sec
-///     self->delayed_send(self, std::chrono::seconds(1), poll_atom::value);
+///     self->mail(poll_atom::value).delay(std::chrono::seconds(1)).send(self);
 ///   }
 /// );
 /// ~~

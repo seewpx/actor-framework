@@ -4,14 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <thread>
-#include <vector>
-
-#include "caf/config.hpp"
-#include "caf/detail/io_export.hpp"
-#include "caf/extend.hpp"
 #include "caf/io/accept_handle.hpp"
 #include "caf/io/connection_handle.hpp"
 #include "caf/io/datagram_handle.hpp"
@@ -31,9 +23,17 @@
 #include "caf/io/network/stream_manager.hpp"
 #include "caf/io/receive_policy.hpp"
 #include "caf/io/scribe.hpp"
+
+#include "caf/config.hpp"
+#include "caf/detail/io_export.hpp"
+#include "caf/extend.hpp"
+#include "caf/log/io.hpp"
 #include "caf/ref_counted.hpp"
 
-#include "caf/logger.hpp"
+#include <cstdint>
+#include <string>
+#include <thread>
+#include <vector>
 
 // Forward declaration of C types.
 extern "C" {
@@ -122,9 +122,11 @@ public:
   new_local_udp_endpoint(uint16_t port, const char* in = nullptr,
                          bool reuse_addr = false) override;
 
-  void exec_later(resumable* ptr) override;
+  void schedule(resumable* ptr) override;
 
-  explicit default_multiplexer(actor_system* sys);
+  void delay(resumable* ptr) override;
+
+  explicit default_multiplexer(actor_system& sys);
 
   default_multiplexer(default_multiplexer&&) = delete;
 
@@ -179,32 +181,32 @@ private:
     // read handle which is only registered for reading
     auto old_bf = ptr ? ptr->eventbf() : input_mask;
     // auto bf = fun(op, old_bf);
-    CAF_LOG_TRACE(CAF_ARG(op) << CAF_ARG(fd) << CAF_ARG(old_bf));
+    auto lg = log::io::trace("op = {}, fd = {}, old_bf = {}", op, fd, old_bf);
     auto last = events_.end();
     auto i = std::lower_bound(events_.begin(), last, fd, event_less{});
     if (i != last && i->fd == fd) {
       CAF_ASSERT(ptr == i->ptr);
       // squash events together
-      CAF_LOG_DEBUG("squash events:" << CAF_ARG(i->mask)
-                                     << CAF_ARG(fun(op, i->mask)));
+      log::io::debug("squash events: i->mask = {} fun(op, i->mask) = {}",
+                     i->mask, fun(op, i->mask));
       auto bf = i->mask;
       i->mask = fun(op, bf);
       if (i->mask == bf) {
         // didn't do a thing
-        CAF_LOG_DEBUG("squashing did not change the event");
+        log::io::debug("squashing did not change the event");
       } else if (i->mask == old_bf) {
         // just turned into a nop
-        CAF_LOG_DEBUG("squashing events resulted in a NOP");
+        log::io::debug("squashing events resulted in a NOP");
         events_.erase(i);
       }
     } else {
       // insert new element
       auto bf = fun(op, old_bf);
       if (bf == old_bf) {
-        CAF_LOG_DEBUG("event has no effect (discarded): " << CAF_ARG(bf) << ", "
-                                                          << CAF_ARG(old_bf));
+        log::io::debug("event has no effect (discarded): bf = {}, old-bf = {}",
+                       bf, old_bf);
       } else {
-        CAF_LOG_DEBUG("added handler:" << CAF_ARG(fd) << CAF_ARG(op));
+        log::io::debug("added handler: fd = {} op = {}", fd, op);
         events_.insert(i, event{fd, bf, ptr});
       }
     }

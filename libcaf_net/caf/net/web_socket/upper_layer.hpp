@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include "caf/detail/net_export.hpp"
 #include "caf/net/fwd.hpp"
 #include "caf/net/generic_upper_layer.hpp"
 #include "caf/net/http/request_header.hpp"
+
+#include "caf/detail/net_export.hpp"
 
 namespace caf::net::web_socket {
 
@@ -29,7 +30,7 @@ public:
   virtual error start(lower_layer* down) = 0;
 };
 
-class upper_layer::server : public upper_layer {
+class CAF_NET_EXPORT upper_layer::server : public upper_layer {
 public:
   virtual ~server();
 

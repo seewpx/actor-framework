@@ -5,8 +5,6 @@
 #pragma once
 
 #include "caf/attachable.hpp"
-
-#include "caf/detail/type_list.hpp"
 #include "caf/detail/type_traits.hpp"
 
 namespace caf::detail {
@@ -23,13 +21,14 @@ public:
     // nop
   }
 
-  void actor_exited(const error& fail_state, execution_unit* host) override {
+  void actor_exited(const error& fail_state,
+                    [[maybe_unused]] scheduler* sched) override {
     if constexpr (num_args == 0)
       fn_();
     else if constexpr (num_args == 1)
       fn_(fail_state);
     else
-      fn_(fail_state, host);
+      fn_(fail_state, sched);
   }
 
   static constexpr size_t token_type = attachable::token::anonymous;

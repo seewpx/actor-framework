@@ -6,10 +6,12 @@
 
 #include "caf/allowed_unsafe_message_type.hpp"
 #include "caf/config.hpp"
+#include "caf/detail/assert.hpp"
 #include "caf/detail/atomic_ref_counted.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/disposable.hpp"
 #include "caf/make_counted.hpp"
+#include "caf/resumable.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -24,16 +26,22 @@ public:
 
   /// Describes the current state of an `action`.
   enum class state {
-    disposed,  /// The action may no longer run.
-    scheduled, /// The action is scheduled for execution.
+    scheduled,        /// The action is scheduled for execution.
+    running,          /// The action is currently running in another thread.
+    deferred_dispose, /// The action is currently running, and will be disposed.
+    disposed,         /// The action may no longer run.
   };
 
   /// Internal interface of `action`.
-  class CAF_CORE_EXPORT impl : public disposable::impl {
+  class CAF_CORE_EXPORT impl : public disposable::impl, public resumable {
   public:
-    virtual void run() = 0;
-
     virtual state current_state() const noexcept = 0;
+
+    subtype_t subtype() const noexcept final;
+
+    void ref_resumable() const noexcept final;
+
+    void deref_resumable() const noexcept final;
   };
 
   using impl_ptr = intrusive_ptr<impl>;
@@ -60,18 +68,19 @@ public:
   // -- observers --------------------------------------------------------------
 
   [[nodiscard]] bool disposed() const {
-    return pimpl_->current_state() == state::disposed;
+    auto state = pimpl_->current_state();
+    return state == state::disposed || state == state::deferred_dispose;
   }
 
   [[nodiscard]] bool scheduled() const {
-    return pimpl_->current_state() == state::scheduled;
+    return !disposed();
   }
 
   // -- mutators ---------------------------------------------------------------
 
   /// Triggers the action.
   void run() {
-    pimpl_->run();
+    pimpl_->resume(nullptr, 0);
   }
 
   /// Cancel the action if it has not been invoked yet.
@@ -118,38 +127,97 @@ private:
   impl_ptr pimpl_;
 };
 
+/// Checks whether two actions are equal by comparing their pointers.
+inline bool operator==(const action& lhs, const action& rhs) noexcept {
+  return lhs.ptr() == rhs.ptr();
+}
+
+/// Checks whether two actions are not equal by comparing their pointers.
+inline bool operator!=(const action& lhs, const action& rhs) noexcept {
+  return !(lhs == rhs);
+}
+
 } // namespace caf
 namespace caf::detail {
 
 template <class F, bool IsSingleShot>
-struct default_action_impl : detail::atomic_ref_counted, action::impl {
-  std::atomic<action::state> state_;
-  F f_;
-
+class default_action_impl : public detail::atomic_ref_counted,
+                            public action::impl {
+public:
   default_action_impl(F fn)
     : state_(action::state::scheduled), f_(std::move(fn)) {
     // nop
   }
 
+  ~default_action_impl() {
+    // The action going out of scope can't be running or deferred dispose.
+    CAF_ASSERT(state_.load() != action::state::running);
+    CAF_ASSERT(state_.load() != action::state::deferred_dispose);
+    if (state_.load() == action::state::scheduled)
+      f_.~F();
+  }
+
   void dispose() override {
-    state_ = action::state::disposed;
+    // Try changing the state to disposed
+    for (;;) {
+      if (auto expected = state_.load(); expected == action::state::scheduled) {
+        if (state_.compare_exchange_weak(expected, action::state::disposed)) {
+          f_.~F();
+          return;
+        }
+      } else if (expected == action::state::running) {
+        if (state_.compare_exchange_weak(expected,
+                                         action::state::deferred_dispose))
+          return;
+      } else { // action::state::{deferred_dispose, disposed}
+        return;
+      }
+    }
   }
 
   bool disposed() const noexcept override {
-    return state_.load() == action::state::disposed;
+    auto current_state = state_.load();
+    return current_state == action::state::disposed
+           || current_state == action::state::deferred_dispose;
   }
 
   action::state current_state() const noexcept override {
     return state_.load();
   }
 
-  void run() override {
-    if (state_.load() == action::state::scheduled) {
-      f_();
-      if constexpr (IsSingleShot)
-        state_ = action::state::disposed;
-      // else: allow the action to re-register itself when needed by *not*
-      //       setting the state to disposed, e.g., to implement time loops.
+  void run_single_shot() {
+    // We can only run a scheduled action.
+    auto expected = action::state::scheduled;
+    if (!state_.compare_exchange_strong(expected, action::state::disposed))
+      return;
+    f_();
+    f_.~F();
+  }
+
+  resume_result run_multi_shot() {
+    // We can only run a scheduled action.
+    auto expected = action::state::scheduled;
+    if (!state_.compare_exchange_strong(expected, action::state::running))
+      return resumable::done;
+    f_();
+    // Once run, we can stay in the running state or switch to deferred dispose.
+    expected = action::state::running;
+    if (state_.compare_exchange_strong(expected, action::state::scheduled))
+      return resumable::done;
+    CAF_ASSERT(expected == action::state::deferred_dispose);
+    [[maybe_unused]] auto ok
+      = state_.compare_exchange_strong(expected, action::state::disposed);
+    CAF_ASSERT(ok);
+    f_.~F();
+    return resumable::awaiting_message;
+  }
+
+  resume_result resume(scheduler*, size_t) override {
+    if constexpr (IsSingleShot) {
+      run_single_shot();
+      return resumable::done;
+    } else {
+      return run_multi_shot();
     }
   }
 
@@ -168,6 +236,12 @@ struct default_action_impl : detail::atomic_ref_counted, action::impl {
   friend void intrusive_ptr_release(const default_action_impl* ptr) noexcept {
     ptr->deref();
   }
+
+private:
+  std::atomic<action::state> state_;
+  union {
+    F f_;
+  };
 };
 
 } // namespace caf::detail

@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
-#include <set>
-#include <string>
-#include <string_view>
-#include <utility>
-
+#include "caf/async/fwd.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/detail/is_complete.hpp"
 #include "caf/detail/pp.hpp"
@@ -17,6 +12,12 @@
 #include "caf/fwd.hpp"
 #include "caf/timespan.hpp"
 #include "caf/timestamp.hpp"
+
+#include <cstdint>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace caf {
 
@@ -117,7 +118,7 @@ public:
 };
 
 /// Dispatches to @ref query_type_name and @ref query_type_id.
-class default_type_id_mapper : public type_id_mapper {
+class CAF_CORE_EXPORT default_type_id_mapper : public type_id_mapper {
 public:
   std::string_view operator()(type_id_t type) const override;
 
@@ -333,7 +334,9 @@ public:
   [[maybe_unused]] constexpr bool operator!=(atom_name, atom_name) {           \
     return false;                                                              \
   }                                                                            \
-  inline std::string to_string(atom_name) { return atom_text; }                \
+  inline std::string to_string(atom_name) {                                    \
+    return atom_text;                                                          \
+  }                                                                            \
   template <class Inspector>                                                   \
   auto inspect(Inspector& f, atom_name& x) {                                   \
     return f.object(x).fields();                                               \
@@ -398,6 +401,7 @@ CAF_BEGIN_TYPE_ID_BLOCK(core_module, 0)
   CAF_ADD_TYPE_ID(core_module, (caf::action))
   CAF_ADD_TYPE_ID(core_module, (caf::actor))
   CAF_ADD_TYPE_ID(core_module, (caf::actor_addr))
+  CAF_ADD_TYPE_ID(core_module, (caf::async::batch))
   CAF_ADD_TYPE_ID(core_module, (caf::byte_buffer))
   CAF_ADD_TYPE_ID(core_module, (caf::config_value))
   CAF_ADD_TYPE_ID(core_module, (caf::cow_string))
@@ -407,8 +411,6 @@ CAF_BEGIN_TYPE_ID_BLOCK(core_module, 0)
   CAF_ADD_TYPE_ID(core_module, (caf::error))
   CAF_ADD_TYPE_ID(core_module, (caf::exit_msg))
   CAF_ADD_TYPE_ID(core_module, (caf::exit_reason))
-  CAF_ADD_TYPE_ID(core_module, (caf::group))
-  CAF_ADD_TYPE_ID(core_module, (caf::group_down_msg))
   CAF_ADD_TYPE_ID(core_module, (caf::hashed_node_id))
   CAF_ADD_TYPE_ID(core_module, (caf::ipv4_address))
   CAF_ADD_TYPE_ID(core_module, (caf::ipv4_endpoint))
@@ -437,6 +439,7 @@ CAF_BEGIN_TYPE_ID_BLOCK(core_module, 0)
   CAF_ADD_TYPE_ID(core_module, (caf::stream_demand_msg))
   CAF_ADD_TYPE_ID(core_module, (caf::stream_open_msg))
   CAF_ADD_TYPE_ID(core_module, (caf::strong_actor_ptr))
+  CAF_ADD_TYPE_ID(core_module, (caf::timeout_msg))
   CAF_ADD_TYPE_ID(core_module, (caf::timespan))
   CAF_ADD_TYPE_ID(core_module, (caf::timestamp))
   CAF_ADD_TYPE_ID(core_module, (caf::unit_t))
@@ -462,7 +465,6 @@ CAF_BEGIN_TYPE_ID_BLOCK(core_module, 0)
   CAF_ADD_ATOM(core_module, caf, flush_atom)
   CAF_ADD_ATOM(core_module, caf, forward_atom)
   CAF_ADD_ATOM(core_module, caf, get_atom)
-  CAF_ADD_ATOM(core_module, caf, group_atom)
   CAF_ADD_ATOM(core_module, caf, idle_atom)
   CAF_ADD_ATOM(core_module, caf, join_atom)
   CAF_ADD_ATOM(core_module, caf, leave_atom)

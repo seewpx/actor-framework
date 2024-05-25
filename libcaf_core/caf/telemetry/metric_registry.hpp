@@ -4,13 +4,7 @@
 
 #pragma once
 
-#include <algorithm>
-#include <initializer_list>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <string_view>
-
+#include "caf/detail/assert.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/fwd.hpp"
 #include "caf/raise_error.hpp"
@@ -19,6 +13,13 @@
 #include "caf/telemetry/gauge.hpp"
 #include "caf/telemetry/histogram.hpp"
 #include "caf/telemetry/metric_family_impl.hpp"
+
+#include <algorithm>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string_view>
 
 namespace caf::telemetry {
 

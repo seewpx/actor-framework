@@ -4,11 +4,14 @@
 
 #pragma once
 
-#include "caf/fwd.hpp"
 #include "caf/io/abstract_broker.hpp"
 #include "caf/io/fwd.hpp"
 #include "caf/io/system_messages.hpp"
+
+#include "caf/detail/assert.hpp"
+#include "caf/fwd.hpp"
 #include "caf/mailbox_element.hpp"
+#include "caf/proxy_registry.hpp"
 
 namespace caf::io {
 
@@ -22,7 +25,6 @@ public:
   broker_servant(handle_type x)
     : hdl_(x),
       value_(strong_actor_ptr{}, make_message_id(),
-             mailbox_element::forwarding_stack{},
              make_message(SysMsgType{x, {}})) {
     // nop
   }
@@ -59,19 +61,20 @@ protected:
     ptr->erase(hdl_);
   }
 
-  void invoke_mailbox_element_impl(execution_unit* ctx, mailbox_element& x) {
+  void invoke_mailbox_element_impl(scheduler* ctx, mailbox_element& x) {
     auto self = this->parent();
-    auto pfac = self->proxy_registry_ptr();
-    if (pfac)
-      ctx->proxy_registry_ptr(pfac);
-    auto guard = detail::make_scope_guard([=] {
-      if (pfac)
-        ctx->proxy_registry_ptr(nullptr);
-    });
-    self->activate(ctx, x);
+    if (auto pfac = self->proxy_registry_ptr()) {
+      proxy_registry::current(pfac);
+      auto guard = detail::scope_guard{[]() noexcept { //
+        proxy_registry::current(nullptr);
+      }};
+      self->activate(ctx, x);
+    } else {
+      self->activate(ctx, x);
+    }
   }
 
-  bool invoke_mailbox_element(execution_unit* ctx) {
+  bool invoke_mailbox_element(scheduler* ctx) {
     // hold on to a strong reference while "messing" with the parent actor
     strong_actor_ptr ptr_guard{this->parent()->ctrl()};
     auto prev = activity_tokens_;
@@ -83,15 +86,13 @@ protected:
         return false;
       // tell broker it entered passive mode, this can result in
       // producing, why we check the condition again afterwards
-      using passive_t = typename std::conditional<
-        std::is_same<handle_type, connection_handle>::value,
+      using passive_t = std::conditional_t<
+        std::is_same_v<handle_type, connection_handle>,
         connection_passivated_msg,
-        typename std::conditional<
-          std::is_same<handle_type, accept_handle>::value,
-          acceptor_passivated_msg,
-          datagram_servant_passivated_msg>::type>::type;
+        std::conditional_t<std::is_same_v<handle_type, accept_handle>,
+                           acceptor_passivated_msg,
+                           datagram_servant_passivated_msg>>;
       mailbox_element tmp{strong_actor_ptr{}, make_message_id(),
-                          mailbox_element::forwarding_stack{},
                           make_message(passive_t{hdl()})};
       invoke_mailbox_element_impl(ctx, tmp);
       return activity_tokens_ != size_t{0};

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "caf/chrono.hpp"
 #include "caf/detail/core_export.hpp"
 #include "caf/none.hpp"
 
@@ -16,51 +17,90 @@
 
 namespace caf::detail {
 
+/// Wraps an output iterator to provide a `push_back` and `insert` member
+/// functions for using the print algorithms.
+template <class OutputIterator>
+struct print_iterator_adapter {
+  using value_type = char;
+
+  OutputIterator pos;
+
+  explicit print_iterator_adapter(OutputIterator iter) : pos(iter) {
+    // nop
+  }
+
+  struct sentinel {};
+
+  sentinel end() const noexcept {
+    return {};
+  }
+
+  void push_back(value_type val) {
+    *pos++ = val;
+  }
+
+  void insert(sentinel, value_type val) {
+    *pos++ == val;
+  }
+
+  template <class InputIterator>
+  void insert(sentinel, InputIterator first, InputIterator last) {
+    pos = std::copy(first, last, pos);
+  }
+};
+
+// TODO: this function is obsolete. Deprecate/remove with future versions.
 CAF_CORE_EXPORT
 size_t print_timestamp(char* buf, size_t buf_size, time_t ts, size_t ms);
+
+template <class Output>
+auto print_escaped_to(Output&& out, char c) {
+  static constexpr bool is_container
+    = detail::has_push_back_v<std::decay_t<Output>>;
+  auto append = [&out](auto... chars) {
+    if constexpr (is_container)
+      (out.push_back(chars), ...);
+    else
+      ((*out++ = chars), ...);
+  };
+  switch (c) {
+    default:
+      append(c);
+      break;
+    case '\\':
+      append('\\', '\\');
+      break;
+    case '\b':
+      append('\\', 'b');
+      break;
+    case '\f':
+      append('\\', 'f');
+      break;
+    case '\n':
+      append('\\', 'n');
+      break;
+    case '\r':
+      append('\\', 'r');
+      break;
+    case '\t':
+      append('\\', 't');
+      break;
+    case '\v':
+      append('\\', 'v');
+      break;
+    case '"':
+      append('\\', '"');
+      break;
+  }
+  if constexpr (!is_container)
+    return out;
+}
 
 template <class Buffer>
 void print_escaped(Buffer& buf, std::string_view str) {
   buf.push_back('"');
-  for (auto c : str) {
-    switch (c) {
-      default:
-        buf.push_back(c);
-        break;
-      case '\\':
-        buf.push_back('\\');
-        buf.push_back('\\');
-        break;
-      case '\b':
-        buf.push_back('\\');
-        buf.push_back('b');
-        break;
-      case '\f':
-        buf.push_back('\\');
-        buf.push_back('f');
-        break;
-      case '\n':
-        buf.push_back('\\');
-        buf.push_back('n');
-        break;
-      case '\r':
-        buf.push_back('\\');
-        buf.push_back('r');
-        break;
-      case '\t':
-        buf.push_back('\\');
-        buf.push_back('t');
-        break;
-      case '\v':
-        buf.push_back('\\');
-        buf.push_back('v');
-        break;
-      case '"':
-        buf.push_back('\\');
-        buf.push_back('"');
-        break;
-    }
-  }
+  for (auto c : str)
+    print_escaped_to(buf, c);
   buf.push_back('"');
 }
 
@@ -126,12 +166,12 @@ void print(Buffer& buf, bool x) {
 }
 
 template <class Buffer, class T>
-std::enable_if_t<std::is_integral<T>::value> print(Buffer& buf, T x) {
+std::enable_if_t<std::is_integral_v<T>> print(Buffer& buf, T x) {
   // An integer can at most have 20 digits (UINT64_MAX).
   char stack_buffer[24];
   char* p = stack_buffer;
   // Convert negative values into positives as necessary.
-  if constexpr (std::is_signed<T>::value) {
+  if constexpr (std::is_signed_v<T>) {
     if (x == std::numeric_limits<T>::min()) {
       using namespace std::literals;
       // The code below would fail for the smallest value, because this value
@@ -170,7 +210,7 @@ std::enable_if_t<std::is_integral<T>::value> print(Buffer& buf, T x) {
 }
 
 template <class Buffer, class T>
-std::enable_if_t<std::is_floating_point<T>::value> print(Buffer& buf, T x) {
+std::enable_if_t<std::is_floating_point_v<T>> print(Buffer& buf, T x) {
   // TODO: Check whether to_chars is available on supported compilers and
   //       re-implement using the new API as soon as possible.
   auto str = std::to_string(x);
@@ -221,20 +261,7 @@ void print(Buffer& buf, std::chrono::duration<Rep, Period> x) {
 template <class Buffer, class Duration>
 void print(Buffer& buf,
            std::chrono::time_point<std::chrono::system_clock, Duration> x) {
-  namespace sc = std::chrono;
-  using clock_type = sc::system_clock;
-  using clock_timestamp = typename clock_type::time_point;
-  using clock_duration = typename clock_type::duration;
-  auto tse = x.time_since_epoch();
-  clock_timestamp as_sys_time{sc::duration_cast<clock_duration>(tse)};
-  auto secs = clock_type::to_time_t(as_sys_time);
-  auto msecs = sc::duration_cast<sc::milliseconds>(tse).count() % 1000;
-  // We print in ISO 8601 format, e.g., "2020-09-01T15:58:42.372". 32-Bytes are
-  // more than enough space.
-  char stack_buffer[32];
-  auto pos = print_timestamp(stack_buffer, 32, secs,
-                             static_cast<size_t>(msecs));
-  buf.insert(buf.end(), stack_buffer, stack_buffer + pos);
+  chrono::print(buf, x);
 }
 
 } // namespace caf::detail

@@ -4,20 +4,22 @@
 
 #pragma once
 
+// NOLINTBEGIN(bugprone-unchecked-optional-access)
+
 #include "caf/config.hpp"
+#include "caf/deep_to_string.hpp"
+#include "caf/detail/assert.hpp"
+#include "caf/detail/type_traits.hpp"
+#include "caf/error.hpp"
+#include "caf/is_error_code_enum.hpp"
+#include "caf/raise_error.hpp"
+#include "caf/unit.hpp"
 
 #include <memory>
 #include <new>
 #include <ostream>
 #include <type_traits>
 #include <utility>
-
-#include "caf/deep_to_string.hpp"
-#include "caf/detail/type_traits.hpp"
-#include "caf/error.hpp"
-#include "caf/is_error_code_enum.hpp"
-#include "caf/raise_error.hpp"
-#include "caf/unit.hpp"
 
 namespace caf {
 
@@ -54,14 +56,12 @@ public:
   // -- static member variables ------------------------------------------------
 
   /// Stores whether move construct and move assign never throw.
-  static constexpr bool nothrow_move
-    = std::is_nothrow_move_constructible<T>::value
-      && std::is_nothrow_move_assignable<T>::value;
+  static constexpr bool nothrow_move = std::is_nothrow_move_constructible_v<T>
+                                       && std::is_nothrow_move_assignable_v<T>;
 
   /// Stores whether copy construct and copy assign never throw.
-  static constexpr bool nothrow_copy
-    = std::is_nothrow_copy_constructible<T>::value
-      && std::is_nothrow_copy_assignable<T>::value;
+  static constexpr bool nothrow_copy = std::is_nothrow_copy_constructible_v<T>
+                                       && std::is_nothrow_copy_assignable_v<T>;
 
   /// Stores whether swap() never throws.
   static constexpr bool nothrow_swap = std::is_nothrow_swappable_v<T>;
@@ -156,8 +156,7 @@ public:
   }
 
   template <class U>
-  typename std::enable_if<std::is_convertible<U, T>::value, expected&>::type
-  operator=(U x) {
+  std::enable_if_t<std::is_convertible_v<U, T>, expected&> operator=(U x) {
     return *this = T{std::move(x)};
   }
 
@@ -189,11 +188,6 @@ public:
     return has_value_;
   }
 
-  /// Returns `true` if the object holds a value (is engaged).
-  [[deprecated("use has_value() instead")]] bool engaged() const noexcept {
-    return has_value_;
-  }
-
   // -- modifiers --------------------------------------------------------------
 
   template <class... Args>
@@ -205,7 +199,7 @@ public:
     return value_;
   }
 
-  void swap(expected& other) noexcept(nothrow_move&& nothrow_swap) {
+  void swap(expected& other) noexcept(nothrow_move && nothrow_swap) {
     expected tmp{std::move(other)};
     other = std::move(*this);
     *this = std::move(tmp);
@@ -215,34 +209,27 @@ public:
 
   /// Returns the contained value.
   /// @pre `has_value() == true`.
-  [[deprecated("use value() instead")]] const T& cvalue() const noexcept {
-    if (!has_value())
-      CAF_RAISE_ERROR("bad_expected_access");
-    return value_;
-  }
-
-  /// @copydoc cvalue
   T& value() & {
     if (!has_value())
       CAF_RAISE_ERROR("bad_expected_access");
     return value_;
   }
 
-  /// @copydoc cvalue
+  /// @copydoc value
   const T& value() const& {
     if (!has_value())
       CAF_RAISE_ERROR("bad_expected_access");
     return value_;
   }
 
-  /// @copydoc cvalue
+  /// @copydoc value
   T&& value() && {
     if (!has_value())
       CAF_RAISE_ERROR("bad_expected_access");
     return std::move(value_);
   }
 
-  /// @copydoc cvalue
+  /// @copydoc value
   const T&& value() const&& {
     if (!has_value())
       CAF_RAISE_ERROR("bad_expected_access");
@@ -298,14 +285,6 @@ public:
   }
 
   // -- error access -----------------------------------------------------------
-
-  /// Returns the contained error.
-  /// @pre `has_value() == false`.
-  [[deprecated("use error() instead")]] const caf::error&
-  cerror() const noexcept {
-    CAF_ASSERT(!has_value_);
-    return error_;
-  }
 
   /// @copydoc cerror
   caf::error& error() & noexcept {
@@ -454,7 +433,7 @@ public:
 
   template <class F>
   auto transform(F&& f) && {
-    using res_t = decltype(f(value_));
+    using res_t = decltype(f(std::move(value_)));
     static_assert(!detail::is_expected_v<res_t>,
                   "F must not return an expected");
     if (has_value())
@@ -476,7 +455,7 @@ public:
 
   template <class F>
   auto transform(F&& f) const&& {
-    using res_t = decltype(f(value_));
+    using res_t = decltype(f(std::move(value_)));
     static_assert(!detail::is_expected_v<res_t>,
                   "F must not return an expected");
     if (has_value())
@@ -564,8 +543,8 @@ private:
 
 /// @relates expected
 template <class T>
-auto operator==(const expected<T>& x, const expected<T>& y)
-  -> decltype(*x == *y) {
+auto operator==(const expected<T>& x,
+                const expected<T>& y) -> decltype(*x == *y) {
   return x && y ? *x == *y : (!x && !y ? x.error() == y.error() : false);
 }
 
@@ -609,8 +588,8 @@ operator==(Enum x, const expected<T>& y) {
 
 /// @relates expected
 template <class T>
-auto operator!=(const expected<T>& x, const expected<T>& y)
-  -> decltype(*x == *y) {
+auto operator!=(const expected<T>& x,
+                const expected<T>& y) -> decltype(*x == *y) {
   return !(x == y);
 }
 
@@ -674,11 +653,6 @@ public:
   }
 
   expected() noexcept = default;
-
-  [[deprecated("use the default constructor instead")]] //
-  expected(unit_t) noexcept {
-    // nop
-  }
 
   expected(caf::error err) noexcept : error_(std::move(err)) {
     // nop
@@ -805,7 +779,7 @@ public:
     if (has_value())
       return f();
     else
-      return res_t{std::move(*error_)};
+      return res_t{*error_};
   }
 
   template <class F>
@@ -865,7 +839,7 @@ public:
     if constexpr (std::is_void_v<res_t>) {
       if (!has_value())
         f(std::move(*error_));
-      return std::move(*this);
+      return *this;
     } else {
       static_assert(std::is_same_v<expected, res_t>,
                     "F must return expected<T> or void");
@@ -917,7 +891,7 @@ public:
     if (has_value())
       return detail::expected_from_fn(std::forward<F>(f));
     else
-      return expected<res_t>{std::move(*error_)};
+      return expected<res_t>{*error_};
   }
 
   template <class F>
@@ -974,13 +948,6 @@ inline bool operator!=(const expected<void>& x, const expected<void>& y) {
   return !(x == y);
 }
 
-template <>
-class [[deprecated("use expected<void> instead")]] expected<unit_t>
-  : public expected<void> {
-public:
-  using expected<void>::expected;
-};
-
 template <class T>
 std::string to_string(const expected<T>& x) {
   if (x)
@@ -996,16 +963,4 @@ inline std::string to_string(const expected<void>& x) {
 
 } // namespace caf
 
-namespace std {
-
-template <class T>
-[[deprecated("use caf::to_string instead")]] auto
-operator<<(ostream& oss, const caf::expected<T>& x) -> decltype(oss << *x) {
-  if (x)
-    oss << *x;
-  else
-    oss << "!" << to_string(x.error());
-  return oss;
-}
-
-} // namespace std
+// NOLINTEND(bugprone-unchecked-optional-access)

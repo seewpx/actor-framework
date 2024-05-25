@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <cstdint>
-#include <set>
-#include <string>
-
 #include "caf/actor_control_block.hpp"
 #include "caf/actor_system.hpp"
 #include "caf/detail/openssl_export.hpp"
 #include "caf/fwd.hpp"
+
+#include <cstdint>
+#include <set>
+#include <string>
 
 namespace caf::openssl {
 
@@ -28,7 +28,7 @@ remote_actor(actor_system& sys, const std::set<std::string>& mpi,
 template <class ActorHandle = actor>
 expected<ActorHandle>
 remote_actor(actor_system& sys, std::string host, uint16_t port) {
-  detail::type_list<ActorHandle> tk;
+  type_list<ActorHandle> tk;
   auto res = remote_actor(sys, sys.message_types(tk), std::move(host), port);
   if (res)
     return actor_cast<ActorHandle>(std::move(*res));

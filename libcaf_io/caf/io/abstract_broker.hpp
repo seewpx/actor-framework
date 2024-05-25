@@ -4,11 +4,6 @@
 
 #pragma once
 
-#include <unordered_map>
-#include <vector>
-
-#include "caf/byte_buffer.hpp"
-#include "caf/detail/io_export.hpp"
 #include "caf/io/accept_handle.hpp"
 #include "caf/io/connection_handle.hpp"
 #include "caf/io/datagram_handle.hpp"
@@ -20,8 +15,14 @@
 #include "caf/io/network/stream_manager.hpp"
 #include "caf/io/receive_policy.hpp"
 #include "caf/io/system_messages.hpp"
+
+#include "caf/byte_buffer.hpp"
+#include "caf/detail/io_export.hpp"
 #include "caf/prohibit_top_level_spawn_marker.hpp"
 #include "caf/scheduled_actor.hpp"
+
+#include <unordered_map>
+#include <vector>
 
 namespace caf::io {
 
@@ -79,21 +80,19 @@ public:
 
   // -- overridden modifiers of abstract_actor ---------------------------------
 
-  bool enqueue(mailbox_element_ptr, execution_unit*) override;
-
-  bool enqueue(strong_actor_ptr, message_id, message, execution_unit*) override;
+  bool enqueue(mailbox_element_ptr, scheduler*) override;
 
   // -- overridden modifiers of local_actor ------------------------------------
 
-  void launch(execution_unit* eu, bool lazy, bool hide) override;
+  void launch(scheduler* eu, bool lazy, bool hide) override;
 
   // -- overridden modifiers of abstract_broker --------------------------------
 
-  bool cleanup(error&& reason, execution_unit* host) override;
+  void on_cleanup(const error& reason) override;
 
   // -- overridden modifiers of resumable --------------------------------------
 
-  resume_result resume(execution_unit*, size_t) override;
+  resume_result resume(scheduler*, size_t) override;
 
   // -- modifiers --------------------------------------------------------------
 
@@ -333,7 +332,7 @@ public:
 
   // -- overridden observers of resumable --------------------------------------
 
-  subtype_t subtype() const override;
+  subtype_t subtype() const noexcept override;
 
   // -- observers --------------------------------------------------------------
 

@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <string_view>
-
 #include "caf/detail/core_export.hpp"
 #include "caf/fwd.hpp"
 #include "caf/span.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
 
 namespace caf::detail {
 
@@ -24,6 +24,9 @@ struct meta_object {
   /// aligning to `max_align_t`.
   size_t padded_size;
 
+  /// Stores the result of `sizeof` for the type.
+  size_t simple_size;
+
   /// Calls the destructor for given object.
   void (*destroy)(void*) noexcept;
 
@@ -34,6 +37,10 @@ struct meta_object {
   /// Creates a new object at given memory location by calling the copy
   /// constructor.
   void (*copy_construct)(void*, const void*);
+
+  /// Creates a new object at given memory location by calling the move
+  /// constructor.
+  void (*move_construct)(void*, void*);
 
   /// Applies an object to a binary serializer.
   bool (*save_binary)(caf::binary_serializer&, const void*);

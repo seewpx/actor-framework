@@ -4,34 +4,30 @@
 
 #pragma once
 
+#include "caf/abstract_blocking_actor.hpp"
+#include "caf/abstract_mailbox.hpp"
 #include "caf/actor_config.hpp"
 #include "caf/actor_traits.hpp"
 #include "caf/after.hpp"
 #include "caf/behavior.hpp"
+#include "caf/blocking_mail.hpp"
 #include "caf/detail/apply_args.hpp"
 #include "caf/detail/blocking_behavior.hpp"
 #include "caf/detail/core_export.hpp"
+#include "caf/detail/default_mailbox.hpp"
 #include "caf/detail/type_list.hpp"
 #include "caf/detail/type_traits.hpp"
+#include "caf/dynamically_typed.hpp"
 #include "caf/extend.hpp"
 #include "caf/fwd.hpp"
-#include "caf/intrusive/drr_cached_queue.hpp"
-#include "caf/intrusive/drr_queue.hpp"
-#include "caf/intrusive/fifo_inbox.hpp"
-#include "caf/intrusive/wdrr_dynamic_multiplexed_queue.hpp"
-#include "caf/intrusive/wdrr_fixed_multiplexed_queue.hpp"
+#include "caf/intrusive/stack.hpp"
 #include "caf/is_timeout_or_catch_all.hpp"
 #include "caf/local_actor.hpp"
 #include "caf/mailbox_element.hpp"
 #include "caf/mixin/requester.hpp"
 #include "caf/mixin/sender.hpp"
-#include "caf/mixin/subscriber.hpp"
 #include "caf/none.hpp"
 #include "caf/policy/arg.hpp"
-#include "caf/policy/categorized.hpp"
-#include "caf/policy/normal_messages.hpp"
-#include "caf/policy/urgent_messages.hpp"
-#include "caf/send.hpp"
 #include "caf/typed_actor.hpp"
 
 #include <chrono>
@@ -44,48 +40,15 @@ namespace caf {
 /// receive rather than a behavior-stack based message processing.
 /// @extends local_actor
 class CAF_CORE_EXPORT blocking_actor
-  // clang-format off
-  : public extend<local_actor, blocking_actor>::
-           with<mixin::requester,
-                mixin::sender,
-                mixin::subscriber>,
+  : public extend<abstract_blocking_actor,
+                  blocking_actor>::with<mixin::sender, mixin::requester>,
     public dynamically_typed_actor_base,
     public blocking_actor_base {
-  // clang-format on
 public:
   // -- nested and member types ------------------------------------------------
 
   /// Base type.
   using super = extended_base;
-
-  /// Stores asynchronous messages with default priority.
-  using normal_queue = intrusive::drr_cached_queue<policy::normal_messages>;
-
-  /// Stores asynchronous messages with high priority.
-  using urgent_queue = intrusive::drr_cached_queue<policy::urgent_messages>;
-
-  /// Configures the FIFO inbox with two nested queues:
-  ///
-  ///   1. Default asynchronous messages
-  ///   2. High-priority asynchronous messages
-  struct mailbox_policy {
-    using deficit_type = size_t;
-
-    using mapped_type = mailbox_element;
-
-    using unique_pointer = mailbox_element_ptr;
-
-    using queue_type
-      = intrusive::wdrr_fixed_multiplexed_queue<policy::categorized,
-                                                normal_queue, urgent_queue>;
-
-    static constexpr size_t normal_queue_index = 0;
-
-    static constexpr size_t urgent_queue_index = 1;
-  };
-
-  /// A queue optimized for single-reader-many-writers.
-  using mailbox_type = intrusive::fifo_inbox<mailbox_policy>;
 
   /// Absolute timeout type.
   using timeout_type = std::chrono::high_resolution_clock::time_point;
@@ -193,23 +156,6 @@ public:
     }
   };
 
-  struct mailbox_visitor {
-    blocking_actor* self;
-    bool& done;
-    receive_cond& rcc;
-    message_id mid;
-    detail::blocking_behavior& bhvr;
-
-    // Dispatches messages with high and normal priority to the same handler.
-    template <class Queue>
-    intrusive::task_result operator()(size_t, Queue&, mailbox_element& x) {
-      return (*this)(x);
-    }
-
-    // Consumes `x`.
-    intrusive::task_result operator()(mailbox_element& x);
-  };
-
   // -- constructors and destructors -------------------------------------------
 
   blocking_actor(actor_config& cfg);
@@ -218,7 +164,7 @@ public:
 
   // -- overridden functions of abstract_actor ---------------------------------
 
-  bool enqueue(mailbox_element_ptr, execution_unit*) override;
+  bool enqueue(mailbox_element_ptr, scheduler*) override;
 
   mailbox_element* peek_at_next_mailbox_element() override;
 
@@ -226,7 +172,7 @@ public:
 
   const char* name() const override;
 
-  void launch(execution_unit* eu, bool lazy, bool hide) override;
+  void launch(scheduler* sched, bool lazy, bool hide) override;
 
   // -- virtual modifiers ------------------------------------------------------
 
@@ -303,7 +249,7 @@ public:
   template <class... Ts>
   do_receive_helper do_receive(Ts&&... xs) {
     auto tup = std::make_tuple(std::forward<Ts>(xs)...);
-    auto cb = [=](receive_cond& rc) mutable {
+    auto cb = [this, tup](receive_cond& rc) mutable {
       varargs_tup_receive(rc, make_message_id(), tup);
     };
     return {cb};
@@ -331,6 +277,32 @@ public:
   /// is signalized to other actors after `act()` returns.
   void fail_state(error err);
 
+  template <class... Args>
+  auto mail(Args&&... args) {
+    return blocking_mail(dynamically_typed{}, this,
+                         std::forward<Args>(args)...);
+  }
+
+  // -- monitoring -------------------------------------------------------------
+
+  using super::monitor;
+
+  using super::demonitor;
+
+  /// Adds a unidirectional monitor to `whom` to receive a `down_msg` when
+  /// `whom` terminates.
+  /// @note Each call to `monitor` creates a new, independent monitor.
+  template <message_priority P = message_priority::normal, class Handle>
+  void monitor(const Handle& whom) {
+    do_monitor(actor_cast<abstract_actor*>(whom), P);
+  }
+
+  /// Removes a monitor from `whom`.
+  template <class Handle>
+  void demonitor(const Handle& whom) {
+    do_demonitor(actor_cast<strong_actor_ptr>(whom));
+  }
+
   // -- customization points ---------------------------------------------------
 
   /// Blocks until at least one message is in the mailbox.
@@ -341,10 +313,10 @@ public:
   virtual bool await_data(timeout_type timeout);
 
   /// Returns the next element from the mailbox or `nullptr`.
-  virtual mailbox_element_ptr dequeue();
+  mailbox_element_ptr dequeue();
 
   /// Returns the queue for storing incoming messages.
-  mailbox_type& mailbox() {
+  abstract_mailbox& mailbox() {
     return mailbox_;
   }
   /// @cond PRIVATE
@@ -357,13 +329,11 @@ public:
     static_assert(sizeof...(Ts), "at least one argument required");
     // extract how many arguments are actually the behavior part,
     // i.e., neither `after(...) >> ...` nor `others >> ...`.
-    using filtered =
-      typename tl_filter_not<type_list<typename std::decay<Ts>::type...>,
-                             is_timeout_or_catch_all>::type;
+    using filtered = tl_filter_not_t<type_list<std::decay_t<Ts>...>,
+                                     is_timeout_or_catch_all>;
     filtered tk;
     behavior bhvr{apply_moved_args(make_behavior_impl, get_indices(tk), tup)};
-    using tail_indices =
-      typename il_range<tl_size<filtered>::value, sizeof...(Ts)>::type;
+    using tail_indices = il_range_t<tl_size_v<filtered>, sizeof...(Ts)>;
     make_blocking_behavior_t factory;
     auto fun = apply_moved_args_prefixed(factory, tail_indices{}, tup, &bhvr);
     receive_impl(rcc, mid, fun);
@@ -384,7 +354,7 @@ public:
   void receive_impl(receive_cond& rcc, message_id mid,
                     detail::blocking_behavior& bhvr);
 
-  bool cleanup(error&& fail_state, execution_unit* host) override;
+  void on_cleanup(const error& reason) override;
 
   // -- backwards compatibility ------------------------------------------------
 
@@ -399,11 +369,21 @@ public:
   /// @endcond
 
 private:
+  void do_unstash(mailbox_element_ptr ptr) override;
+
+  void do_receive(message_id mid, behavior& bhvr, timespan timeout) override;
+
   size_t attach_functor(const actor&);
 
   size_t attach_functor(const actor_addr&);
 
   size_t attach_functor(const strong_actor_ptr&);
+
+  void unstash();
+
+  void close_mailbox(const error& reason);
+
+  void force_close_mailbox() final;
 
   template <class... Ts>
   size_t attach_functor(const typed_actor<Ts...>& x) {
@@ -420,8 +400,11 @@ private:
 
   // -- member variables -------------------------------------------------------
 
-  // used by both event-based and blocking actors
-  mailbox_type mailbox_;
+  /// Stores incoming messages.
+  detail::default_mailbox mailbox_;
+
+  /// Stashes skipped messages until the actor processes the next message.
+  intrusive::stack<mailbox_element> stash_;
 };
 
 } // namespace caf
